@@ -10,8 +10,10 @@ use std::{
     process::Command,
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+const STATUS_REQUESTS_PER_SECOND: u32 = 60;
 
 const DEFAULT_CONFIG: &str = r#"# Checks run only in the worktree listed under each entry.
 # Keep checks short and avoid shared build caches when worktrees run together.
@@ -226,6 +228,17 @@ fn check_worktree(spec: &WorktreeConfig) -> BoardRow {
             detail: "The configured path does not exist. Check path in the config.".into(),
         };
     }
+    if !is_git_worktree(&spec.path) {
+        return BoardRow {
+            name: spec.name.clone(),
+            path,
+            commit: "—".into(),
+            changed_files: 0,
+            status: Status::Error,
+            finished_at: now,
+            detail: "The configured path is not a Git worktree. Point it at a Git checkout.".into(),
+        };
+    }
     if spec.checks.is_empty() {
         return BoardRow {
             name: spec.name.clone(),
@@ -305,6 +318,9 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+}
+fn is_git_worktree(dir: &Path) -> bool {
+    git(dir, &["rev-parse", "--is-inside-work-tree"]).as_deref() == Some("true")
 }
 fn changed_count(dir: &Path) -> usize {
     git(dir, &["status", "--porcelain"])
@@ -387,6 +403,33 @@ fn print_rows(rows: &[BoardRow]) {
     }
 }
 
+#[derive(Debug)]
+struct RateLimiter {
+    window_started: Instant,
+    requests: u32,
+}
+impl Default for RateLimiter {
+    fn default() -> Self {
+        Self {
+            window_started: Instant::now(),
+            requests: 0,
+        }
+    }
+}
+impl RateLimiter {
+    fn allow(&mut self) -> bool {
+        if self.window_started.elapsed() >= Duration::from_secs(1) {
+            self.window_started = Instant::now();
+            self.requests = 0;
+        }
+        if self.requests >= STATUS_REQUESTS_PER_SECOND {
+            return false;
+        }
+        self.requests += 1;
+        true
+    }
+}
+
 fn serve(address: String, rows: Arc<Mutex<Vec<BoardRow>>>) {
     let listener = match TcpListener::bind(&address) {
         Ok(x) => x,
@@ -395,13 +438,21 @@ fn serve(address: String, rows: Arc<Mutex<Vec<BoardRow>>>) {
             return;
         }
     };
+    let limiter = Arc::new(Mutex::new(RateLimiter::default()));
     for stream in listener.incoming().flatten() {
-        let _ = answer(stream, &rows);
+        let _ = answer(stream, &rows, &limiter);
     }
 }
-fn answer(mut stream: TcpStream, rows: &Arc<Mutex<Vec<BoardRow>>>) -> std::io::Result<()> {
+fn answer(
+    mut stream: TcpStream,
+    rows: &Arc<Mutex<Vec<BoardRow>>>,
+    limiter: &Arc<Mutex<RateLimiter>>,
+) -> std::io::Result<()> {
     let mut request = [0_u8; 1024];
     let _ = stream.read(&mut request)?;
+    if !limiter.lock().unwrap().allow() {
+        return write!(stream, "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nCache-Control: no-store\r\nContent-Length: 0\r\n\r\n");
+    }
     let first = String::from_utf8_lossy(&request);
     let json = first.starts_with("GET /status.json ");
     let body = if json {
@@ -428,21 +479,54 @@ fn esc(s: &str) -> String {
 }
 
 fn demo(keep: bool, serve: bool) -> Result<()> {
-    let root = std::env::temp_dir().join(format!("worktree-verifier-demo-{}", now()));
+    let root = unique_temp_dir("worktree-verifier-demo");
+    let source = root.join("source");
     let a = root.join("checkout-ui");
     let b = root.join("checkout-api");
     let c = root.join("checkout-docs");
-    for (dir, file) in [(&a, "button.ts"), (&b, "health.rs"), (&c, "guide.md")] {
-        fs::create_dir_all(dir)?;
-        fs::write(dir.join(file), "sample change\n")?;
-    }
-    let config = root.join("worktree-verifier.toml");
-    fs::write(&config, format!("[server]\naddress = \"127.0.0.1:4319\"\npoll_seconds = 2\n\n[[worktrees]]\nname = \"checkout-ui\"\npath = \"{}\"\nchecks = [\"test -f button.ts\"]\n\n[[worktrees]]\nname = \"checkout-api\"\npath = \"{}\"\nchecks = [\"test -f health.rs\"]\n\n[[worktrees]]\nname = \"checkout-docs\"\npath = \"{}\"\nchecks = [\"test -f guide.md\"]\n", a.display(), b.display(), c.display()))?;
-    println!("Sample worktrees: {}", root.display());
-    println!("The sample is isolated in a temporary directory. It does not touch your repository.");
-    let result = run_from_config(&config, !serve, false);
+    let result = (|| -> Result<()> {
+        fs::create_dir_all(&source)?;
+        run_git(&source, &["init"])?;
+        run_git(
+            &source,
+            &["config", "user.email", "demo@worktree-verifier.local"],
+        )?;
+        run_git(&source, &["config", "user.name", "Worktree Verifier demo"])?;
+        fs::write(source.join("README.md"), "Isolated demo source\n")?;
+        run_git(&source, &["add", "README.md"])?;
+        run_git(&source, &["commit", "-m", "Seed isolated demo"])?;
+
+        for (name, dir, file) in [
+            ("checkout-ui", &a, "button.ts"),
+            ("checkout-api", &b, "health.rs"),
+            ("checkout-docs", &c, "guide.md"),
+        ] {
+            let branch = format!("demo-{name}");
+            run_git(
+                &source,
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    &branch,
+                    dir.to_str().context("non-UTF-8 demo path")?,
+                ],
+            )?;
+            fs::write(dir.join(file), "sample change\n")?;
+            run_git(dir, &["add", file])?;
+            run_git(dir, &["commit", "-m", &format!("Add {name} sample")])?;
+        }
+
+        let config = root.join("worktree-verifier.toml");
+        fs::write(&config, format!("[server]\naddress = \"127.0.0.1:4319\"\npoll_seconds = 2\n\n[[worktrees]]\nname = \"checkout-ui\"\npath = \"{}\"\nchecks = [\"test -f button.ts\"]\n\n[[worktrees]]\nname = \"checkout-api\"\npath = \"{}\"\nchecks = [\"test -f health.rs\"]\n\n[[worktrees]]\nname = \"checkout-docs\"\npath = \"{}\"\nchecks = [\"test -f guide.md\"]\n", toml_path(&a), toml_path(&b), toml_path(&c)))?;
+        println!("Sample worktrees: {}", root.display());
+        println!(
+            "The sample is isolated in a temporary directory. It does not touch your repository."
+        );
+        run_from_config(&config, !serve, false)
+    })();
     if !keep && !serve {
-        fs::remove_dir_all(&root)?;
+        fs::remove_dir_all(&root).with_context(|| format!("removing {}", root.display()))?;
         println!("Removed sample worktrees.");
     } else {
         println!("Kept sample worktrees at {}", root.display());
@@ -450,23 +534,38 @@ fn demo(keep: bool, serve: bool) -> Result<()> {
     result
 }
 
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+}
+fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .with_context(|| format!("starting git {}", args.join(" ")))?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed in {}: {}",
+            args.join(" "),
+            dir.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+fn toml_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    // @claim:demo-isolated-worktrees
-    fn claim_demo_runs_three_isolated_checks() {
-        let root = std::env::temp_dir().join(format!("wtv-test-{}", now()));
-        fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("smoke.txt"), "ok").unwrap();
-        let row = check_worktree(&WorktreeConfig {
-            name: "sample".into(),
-            path: root.clone(),
-            checks: vec!["test -f smoke.txt".into()],
-        });
-        assert!(matches!(row.status, Status::Pass));
-        fs::remove_dir_all(root).unwrap();
-    }
     #[test]
     fn missing_path_reports_a_next_step() {
         let row = check_worktree(&WorktreeConfig {
@@ -485,8 +584,18 @@ mod tests {
     #[test]
     // @claim:configured-commands
     fn claim_configured_command_runs_in_its_worktree() {
-        let root = std::env::temp_dir().join(format!("wtv-command-{}", now()));
+        let root = unique_temp_dir("wtv-command");
         fs::create_dir_all(&root).unwrap();
+        run_git(&root, &["init"]).unwrap();
+        run_git(
+            &root,
+            &["config", "user.email", "test@worktree-verifier.local"],
+        )
+        .unwrap();
+        run_git(&root, &["config", "user.name", "Worktree Verifier test"]).unwrap();
+        fs::write(root.join("seed"), "ok").unwrap();
+        run_git(&root, &["add", "seed"]).unwrap();
+        run_git(&root, &["commit", "-m", "Seed test worktree"]).unwrap();
         let marker = root.join("ran-here");
         let command = format!("printf yes > {}", marker.display());
         let row = check_worktree(&WorktreeConfig {
@@ -500,7 +609,7 @@ mod tests {
     }
     #[test]
     fn repeated_edit_changes_the_polling_stamp() {
-        let root = std::env::temp_dir().join(format!("wtv-stamp-{}", now()));
+        let root = unique_temp_dir("wtv-stamp");
         fs::create_dir_all(&root).unwrap();
         let file = root.join("source.txt");
         fs::write(&file, "one").unwrap();
@@ -508,5 +617,48 @@ mod tests {
         fs::write(&file, "two changes").unwrap();
         assert_ne!(first, tree_stamp(&root));
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn non_git_directory_is_rejected_before_its_command_runs() {
+        let root = unique_temp_dir("wtv-non-git");
+        fs::create_dir_all(&root).unwrap();
+        let marker = root.join("must-not-exist");
+        let row = check_worktree(&WorktreeConfig {
+            name: "not-a-worktree".into(),
+            path: root.clone(),
+            checks: vec![format!("touch {}", marker.display())],
+        });
+        assert!(matches!(row.status, Status::Error));
+        assert!(row.detail.contains("not a Git worktree"));
+        assert!(!marker.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn rate_limit_returns_429_and_retry_after_after_sixty_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let rows = Arc::new(Mutex::new(Vec::new()));
+        let limiter = Arc::new(Mutex::new(RateLimiter::default()));
+        let server_rows = rows.clone();
+        let server_limiter = limiter.clone();
+        let worker = thread::spawn(move || {
+            for _ in 0..=STATUS_REQUESTS_PER_SECOND {
+                let (stream, _) = listener.accept().unwrap();
+                answer(stream, &server_rows, &server_limiter).unwrap();
+            }
+        });
+        let mut last = String::new();
+        for _ in 0..=STATUS_REQUESTS_PER_SECOND {
+            let mut stream = TcpStream::connect(address).unwrap();
+            stream
+                .write_all(b"GET /status.json HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            last = response;
+        }
+        worker.join().unwrap();
+        assert!(last.starts_with("HTTP/1.1 429"));
+        assert!(last.contains("Retry-After: 1"));
     }
 }

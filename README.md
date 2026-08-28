@@ -1,12 +1,10 @@
 # Worktree Verifier
 
-Run fast, declared smoke checks in separate Git worktrees. Worktree Verifier is
-for developers who need to know which branch is fresh without switching
-worktrees or waiting for CI.
+Run fast, declared smoke checks in separate Git worktrees. It is for developers
+who need to know which branch is fresh without switching worktrees.
 
-It is a free, local Rust CLI. It watches configured directories, runs checks
-serially, and serves a compact board on `127.0.0.1` with each worktree's state,
-commit, and changed-file count. It has no account, telemetry, or hosted service.
+It watches configured Git worktrees and serves a compact board on `127.0.0.1`
+with each worktree's state, commit, and changed-file count.
 
 ## Install
 
@@ -51,7 +49,6 @@ Watch continuously and open the printed localhost URL:
 worktree-verifier run
 ```
 
-Checks run one at a time. This reduces accidental writes to shared test caches.
 Worktree Verifier never discovers or runs commands automatically; only commands
 in your config run. Review them before use.
 
@@ -61,10 +58,11 @@ in your config run. Review them before use.
 cargo run -- demo
 ```
 
-The demo creates `checkout-ui`, `checkout-api`, and `checkout-docs` under a
-temporary directory, runs one declared smoke check in each, prints the location,
-and removes the directory. Use `cargo run -- demo --keep` to inspect it or
-`cargo run -- demo --serve` to open its localhost board.
+The demo creates `checkout-ui`, `checkout-api`, and `checkout-docs` as actual
+Git worktrees under a temporary directory. It commits a sample file and runs one
+declared smoke check in each, prints the location, and removes the directory.
+Use `cargo run -- demo --keep` to inspect it or `cargo run -- demo --serve` to
+open its localhost board.
 
 The hosted documentation recording is available at `/demo` after running the
 site locally. See [.factory/demo.md](.factory/demo.md) for its sandbox details.
@@ -91,10 +89,8 @@ npm run dev
 
 ## Privacy and boundaries
 
-The CLI binds its board to loopback by default. Its own code makes no network
-requests. A command you configure may make network requests; that is under your
-control. Worktree Verifier does not replace CI, write tests, or synchronize
-branches.
+The CLI binds its board to loopback by default. A command you configure may make
+network requests; review each command before adding it.
 
 The documentation site is static and has no analytics. Its `/privacy` and
 `/terms` routes are included in the built site.

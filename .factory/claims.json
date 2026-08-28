@@ -4,7 +4,7 @@
     "claim": "The sample creates three separate temporary worktrees and runs one declared check in each.",
     "where": "/demo, README",
     "test": "cargo test -- claim_demo_runs_three_isolated_checks",
-    "sandbox": "fresh temp directory; invoke the same per-worktree check implementation"
+    "sandbox": "fresh cargo integration-test process; invoke worktree-verifier demo, assert three passing rows, three distinct commit hashes, and cleanup"
   },
   {
     "id": "loopback-default",
@@ -18,6 +18,6 @@
     "claim": "The CLI runs only commands you put in its config.",
     "where": "landing boundaries",
     "test": "cargo test -- claim_configured_command_runs_in_its_worktree",
-    "sandbox": "fresh temporary worktree; run a declared smoke command and assert its observable marker"
+    "sandbox": "fresh Git worktree; run a declared smoke command and assert its observable marker"
   }
 ]

@@ -45,6 +45,7 @@ removed. Keyboard focus is a 3px vermilion outline.
 illustration: three small worktree folders feed a central check board, printed
 with a coarse navy, vermilion, and moss halftone. It contains no readable text.
 Generated for this product with `/opt/fleet/lib/gen-image.sh` using the
-factory-image deployment; optimized to WebP under 300 KB. The terminal
+factory-image deployment; downsampled in-repository to a 960×640, 53 KB WebP
+to meet the mobile LCP budget. The terminal
 recording is a hand-authored SVG, not a third-party asset. Small rules, dots,
 and registration marks are CSS/SVG made in this repository.
