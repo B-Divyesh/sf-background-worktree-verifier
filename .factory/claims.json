@@ -1,0 +1,23 @@
+[
+  {
+    "id": "demo-isolated-worktrees",
+    "claim": "The sample creates three separate temporary worktrees and runs one declared check in each.",
+    "where": "/demo, README",
+    "test": "cargo test -- claim_demo_runs_three_isolated_checks",
+    "sandbox": "fresh temp directory; invoke the same per-worktree check implementation"
+  },
+  {
+    "id": "loopback-default",
+    "claim": "The status board binds to localhost by default.",
+    "where": "landing boundaries, privacy",
+    "test": "cargo test -- claim_loopback_is_default",
+    "sandbox": "fresh process; inspect the default server configuration"
+  },
+  {
+    "id": "configured-commands",
+    "claim": "The CLI runs only commands you put in its config.",
+    "where": "landing boundaries",
+    "test": "cargo test -- claim_configured_command_runs_in_its_worktree",
+    "sandbox": "fresh temporary worktree; run a declared smoke command and assert its observable marker"
+  }
+]

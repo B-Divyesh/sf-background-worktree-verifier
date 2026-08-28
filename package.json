@@ -1,0 +1,13 @@
+{
+  "name": "background-worktree-verifier-site",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "vite --config site/vite.config.js",
+    "build:site": "vite build --config site/vite.config.js",
+    "build": "npm run build:site",
+    "test": "cargo test && node --test site/test/site.test.mjs",
+    "preview": "vite preview --config site/vite.config.js"
+  },
+  "devDependencies": { "vite": "^6.1.0" }
+}

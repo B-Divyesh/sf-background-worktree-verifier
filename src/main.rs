@@ -169,9 +169,15 @@ fn run_from_config(path: &Path, once: bool, json: bool) -> Result<()> {
     check_all(&cfg.worktrees, &rows);
     if json {
         println!("{}", serde_json::to_string_pretty(&*rows.lock().unwrap())?);
+        if has_failed(&rows.lock().unwrap()) {
+            bail!("one or more worktree checks failed")
+        }
         return Ok(());
     }
     print_rows(&rows.lock().unwrap());
+    if once && has_failed(&rows.lock().unwrap()) {
+        bail!("one or more worktree checks failed")
+    }
     if once {
         return Ok(());
     }
@@ -193,6 +199,11 @@ fn run_from_config(path: &Path, once: bool, json: bool) -> Result<()> {
             previous = next;
         }
     }
+}
+
+fn has_failed(rows: &[BoardRow]) -> bool {
+    rows.iter()
+        .any(|row| matches!(row.status, Status::Fail | Status::Error))
 }
 
 fn check_all(configs: &[WorktreeConfig], rows: &Arc<Mutex<Vec<BoardRow>>>) {
@@ -311,12 +322,51 @@ fn signatures(configs: &[WorktreeConfig]) -> Vec<String> {
         .iter()
         .map(|w| {
             format!(
-                "{}:{}",
+                "{}:{}:{}",
                 git(&w.path, &["rev-parse", "HEAD"]).unwrap_or_default(),
-                git(&w.path, &["status", "--porcelain"]).unwrap_or_default()
+                git(&w.path, &["status", "--porcelain"]).unwrap_or_default(),
+                tree_stamp(&w.path)
             )
         })
         .collect()
+}
+
+/// A cheap polling stamp catches repeated edits to an already-modified file.
+/// Git porcelain alone would not change for the second edit.
+fn tree_stamp(path: &Path) -> u128 {
+    let mut stamp = 0_u128;
+    let Ok(entries) = fs::read_dir(path) else {
+        return stamp;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        if matches!(name.as_ref(), ".git" | "target" | "node_modules") {
+            continue;
+        }
+        if entry
+            .file_type()
+            .map(|kind| kind.is_symlink())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata() {
+            stamp = stamp.wrapping_add(meta.len() as u128);
+            if let Ok(modified) = meta.modified() {
+                stamp = stamp.wrapping_add(
+                    modified
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos(),
+                );
+            }
+            if meta.is_dir() {
+                stamp = stamp.wrapping_add(tree_stamp(&entry.path()));
+            }
+        }
+    }
+    stamp
 }
 
 fn print_rows(rows: &[BoardRow]) {
@@ -446,6 +496,17 @@ mod tests {
         });
         assert!(matches!(row.status, Status::Pass));
         assert_eq!(fs::read_to_string(marker).unwrap(), "yes");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn repeated_edit_changes_the_polling_stamp() {
+        let root = std::env::temp_dir().join(format!("wtv-stamp-{}", now()));
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("source.txt");
+        fs::write(&file, "one").unwrap();
+        let first = tree_stamp(&root);
+        fs::write(&file, "two changes").unwrap();
+        assert_ne!(first, tree_stamp(&root));
         fs::remove_dir_all(root).unwrap();
     }
 }

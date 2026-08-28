@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://background-worktree-verifier.sociobot.in/sitemap.xml
