@@ -1,0 +1,5 @@
+{
+  "slug": "background-worktree-verifier",
+  "title": "Worktree Verifier",
+  "summary": "Check changed worktrees in the background with clear, local smoke results."
+}
