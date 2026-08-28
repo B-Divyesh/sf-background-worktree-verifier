@@ -82,6 +82,14 @@ artifact. This work order deploys through the repository's configured static
 deployment on push. After deployment, verify `/`, `/demo`, `/privacy`, and
 `/terms` return 200, and an unknown path uses the configured 404 response.
 
+Repair commit `d464ffad0e44852939526a6c2b433c6da2517f86` was pushed to `origin/main`
+on 2026-08-28. The live identity probe at 14:40 UTC still returned the prior
+`index-DuqyDyKf.js` asset and prior 200 response for an unknown route, so the
+factory's external static deployment had not propagated during this worker run.
+The checked-in `staticwebapp.config.json` is the deployment input containing
+the explicit-route/404 repair; re-run the live probe once the factory reports
+the new deployment.
+
 ## Known gaps / next steps
 
 - No offline claim or service worker is shipped; the static documentation site
