@@ -5,7 +5,7 @@ edition = "2021"
 description = "Configured checks for separate Git worktrees"
 license = "MIT"
 repository = "https://github.com/B-Divyesh/sf-background-worktree-verifier"
-exclude = ["site/**", ".factory/source-assets/**", "dist/**"]
+exclude = ["site/**", ".factory/**", "dist/**", "graphify-out/**"]
 
 [[bin]]
 name = "worktree-verifier"

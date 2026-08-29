@@ -86,6 +86,7 @@ test('@claim:demo-browser-sandbox', { timeout: 60000 }, async () => {
     await page.getByRole('button', { name: 'Replay sample' }).click();
     await page.waitForFunction(expected => document.querySelector('#demo-output').textContent !== expected, initialOutput);
     await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForFunction(() => scrollY >= document.documentElement.scrollHeight - innerHeight - 2);
     const bannerBox = await page.locator('.demo-banner').boundingBox();
     assert.ok(bannerBox && bannerBox.y >= 0 && bannerBox.y + bannerBox.height <= 844, `banner left viewport: ${JSON.stringify(bannerBox)}`);
     for (const name of ['Reset demo', 'Start for real']) {

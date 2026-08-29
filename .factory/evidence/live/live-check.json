@@ -1,0 +1,134 @@
+{
+  "routes": {
+    "404": {
+      "status": 404,
+      "hasTitle": true,
+      "og": true,
+      "twitter": true,
+      "legalLinks": true
+    },
+    "/": {
+      "status": 200,
+      "title": "Worktree Verifier — Check changed worktrees",
+      "h1": 1,
+      "main": 1,
+      "seriousAxe": 0,
+      "overflow": false,
+      "rawCanonical": true,
+      "rawOg": true,
+      "rawTwitter": true
+    },
+    "/demo": {
+      "status": 200,
+      "title": "Demo — Worktree Verifier",
+      "h1": 1,
+      "main": 1,
+      "seriousAxe": 0,
+      "overflow": false,
+      "rawCanonical": true,
+      "rawOg": true,
+      "rawTwitter": true
+    },
+    "/privacy": {
+      "status": 200,
+      "title": "Privacy — Worktree Verifier",
+      "h1": 1,
+      "main": 1,
+      "seriousAxe": 0,
+      "overflow": false,
+      "rawCanonical": true,
+      "rawOg": true,
+      "rawTwitter": true
+    },
+    "/terms": {
+      "status": 200,
+      "title": "Terms — Worktree Verifier",
+      "h1": 1,
+      "main": 1,
+      "seriousAxe": 0,
+      "overflow": false,
+      "rawCanonical": true,
+      "rawOg": true,
+      "rawTwitter": true
+    }
+  },
+  "demo": {
+    "url": "https://background-worktree-verifier.sociobot.in/?demo=1",
+    "banner": {
+      "x": 0,
+      "y": 70,
+      "width": 390,
+      "height": 92
+    },
+    "reset": {
+      "x": 69.578125,
+      "y": 110,
+      "width": 113.625,
+      "height": 44
+    },
+    "start": {
+      "x": 191.203125,
+      "y": 110,
+      "width": 129.21875,
+      "height": 44
+    },
+    "storage": {
+      "local": 0,
+      "session": 0,
+      "indexed": 0,
+      "workers": 0
+    },
+    "resetOutput": true,
+    "resetFocus": "H1",
+    "resetScroll": 0,
+    "scrolledY": 680,
+    "bannerAtScrolledEnd": {
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 92
+    },
+    "resetAtScrolledEnd": {
+      "x": 69.265625,
+      "y": 40,
+      "width": 113.890625,
+      "height": 44
+    },
+    "startAtScrolledEnd": {
+      "x": 191.15625,
+      "y": 40,
+      "width": 129.578125,
+      "height": 44
+    },
+    "maxScroll": 682
+  },
+  "requests": [
+    "https://background-worktree-verifier.sociobot.in/",
+    "https://background-worktree-verifier.sociobot.in/assets/main-D-D8bWyI.js",
+    "https://background-worktree-verifier.sociobot.in/assets/main-BnLLyCgp.css",
+    "https://background-worktree-verifier.sociobot.in/halftone-worktrees.webp",
+    "https://background-worktree-verifier.sociobot.in/demo",
+    "https://background-worktree-verifier.sociobot.in/assets/main-D-D8bWyI.js",
+    "https://background-worktree-verifier.sociobot.in/assets/main-BnLLyCgp.css",
+    "https://background-worktree-verifier.sociobot.in/privacy",
+    "https://background-worktree-verifier.sociobot.in/assets/main-D-D8bWyI.js",
+    "https://background-worktree-verifier.sociobot.in/assets/main-BnLLyCgp.css",
+    "https://background-worktree-verifier.sociobot.in/terms",
+    "https://background-worktree-verifier.sociobot.in/assets/main-D-D8bWyI.js",
+    "https://background-worktree-verifier.sociobot.in/assets/main-BnLLyCgp.css"
+  ],
+  "errors": [],
+  "links": {
+    "https://background-worktree-verifier.sociobot.in/#main": 200,
+    "https://background-worktree-verifier.sociobot.in/": 200,
+    "https://background-worktree-verifier.sociobot.in/?demo=1": 200,
+    "https://background-worktree-verifier.sociobot.in/#setup": 200,
+    "https://background-worktree-verifier.sociobot.in/privacy": 200,
+    "https://background-worktree-verifier.sociobot.in/terms": 200,
+    "https://background-worktree-verifier.sociobot.in/demo#main": 200,
+    "https://background-worktree-verifier.sociobot.in/privacy#main": 200,
+    "https://background-worktree-verifier.sociobot.in/terms#main": 200
+  },
+  "pass": true,
+  "aggregation": "PASS — route pages and the separate HTTP 404 record satisfy their applicable checks"
+}

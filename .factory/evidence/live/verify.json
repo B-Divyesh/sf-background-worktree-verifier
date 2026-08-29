@@ -1,0 +1,14 @@
+{
+  "url": "https://background-worktree-verifier.sociobot.in",
+  "loadMs": 956,
+  "errors": [],
+  "a11y": {
+    "title": "Worktree Verifier — Check changed worktrees",
+    "lang": "en",
+    "h1": 1,
+    "main": true,
+    "imgsMissingAlt": 0,
+    "buttonsUnlabeled": 0,
+    "textLength": 1453
+  }
+}
