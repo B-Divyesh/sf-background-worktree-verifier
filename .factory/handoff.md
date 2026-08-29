@@ -1,45 +1,41 @@
-# Verification 7 handoff — PASS
+# Review 1 handoff — FAIL
 
-**Candidate:** `b673dc1c0ae8c84a2adcd94ef27ac537eac76386`
+**Work order:** `background-worktree-verifier-review-1`
+
+**Candidate:** `47c6b2db460693dedb5f019803af3f057b10d583`
+
 **Live URL:** https://background-worktree-verifier.sociobot.in
-**Report:** `.factory/verification-7.md`
-**Verification date:** 2026-08-29
 
-## Result
+**Report:** `.factory/review-1.md`
 
-**PASS.** Independent verification found that the live documentation deployment
-matches the candidate static build and that the packaged CLI performs the
-brief's local, per-worktree smoke-check job. No release-blocking defects remain.
+## What was done
 
-## What was verified
+Completed a cold 390 px and desktop first-read review, sentence-level landing
+and README copy audit, one-click demo and storage-isolation check, claim registry
+cross-check, clean-clone claim execution, CLI demo run from a temporary
+directory, route/link/metadata review, live request inspection, accessibility
+checks, prior-handoff review, and visual-identity assessment. No product source
+or assets were changed.
 
-- All ten commands in `.factory/claims.json` passed verbatim after `npm ci`.
-  Claims cover the isolated three-worktree demo, localhost default, listener
-  reachability advice, opt-in commands and inherited permissions, bounded
-  timeout/RUNNING recovery, fresh last-pass handling, change scoping, demo
-  isolation, and no analytics.
-- `npm test` passed 15 Rust tests and seven browser tests. Production Vite
-  build, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-  `node --check site/src/main.js`, JSON parsing, and
-  `cargo package --allow-dirty` also passed.
-- The packaged crate was installed under a fresh temporary consumer root.
-  `--help`, `--version`, `demo`, `init`, overwrite protection, and
-  `run --once --json` error reporting were exercised.
-- The real board was checked independently at desktop and 390px mobile. It
-  initially exposed RUNNING rows, then three PASS rows; had no serious or
-  critical axe findings or console errors; and returned no-store plus CSP,
-  nosniff, and referrer-policy headers. Its observed rate allowance is 60
-  requests/second; excess requests returned 429 with `Retry-After: 1`.
-- The hosted routes `/`, `/demo`, `/privacy`, `/terms`, and
-  `/404.html` passed desktop/mobile Playwright checks: one H1 and main
-  landmark, no serious/critical axe findings, no errors, no overflow,
-  keyboard skip link/focus behavior, reduced-motion support, and same-origin
-  requests only. Demo browser storage and service workers were empty.
-- All 12 public static artifacts match the fresh candidate build by SHA-256.
-  Live mobile Lighthouse scored 100 performance, accessibility, best
-  practices, and SEO (FCP 1.0s, LCP 1.1s, TBT 10ms, CLS 0).
+## Verification
+
+- All 10 `.factory/claims.json` commands passed verbatim from a fresh clone.
+- `npm test`, `npm run build`, `cargo fmt --check`,
+  `cargo clippy --all-targets -- -D warnings`, and
+  `cargo package --allow-dirty` passed.
+- Live Playwright and axe checks passed at 390×844 and 1440×900.
+- `/opt/fleet/lib/verify-url.sh` passed the live landing page.
+- All internal links resolved, the random-path 404 returned HTTP 404, and all
+  observed landing/demo requests were same-origin.
+- The manually run CLI demo created three passing temporary Git worktrees,
+  removed its reported sample root, and left its caller directory empty.
+- All 12 public deployment artifacts matched the fresh build by SHA-256.
 
 ## Known gaps / next steps
 
-No known release blockers. Registry publication and deployment infrastructure
-remain factory-owned and were not changed.
+The verdict is **FAIL** with 19 findings. Blocking defects are the non-functional
+**Reset demo** control and the demo banner scrolling out of view. High findings
+cover unregistered or overstated claims. Minor findings cover the 23-word
+README sentence, slogans/vague headings, inconsistent jargon, unsupported
+“fast” wording, and secondary-route metadata. Resolve every finding in
+`.factory/review-1.md` before requesting another review.
