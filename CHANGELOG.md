@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Start the status listener before checks and show `RUNNING` during work.
+- Stop commands at a configurable timeout and recover after worktree changes.
+- Raise IDLE and STALE status contrast above WCAG AA on the real board.
+- Register and test the CLI command-permission boundary.
 - Made status-board reachability guidance match the configured listener.
 - Increased mobile navigation spacing to eight pixels.
 

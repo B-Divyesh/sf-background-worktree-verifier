@@ -1,4 +1,8 @@
 /* Release repair: touch targets and focusable status-table sizing. */
+:root {
+  --ochre: #92570e;
+}
+
 .site-header {
   align-items: center;
   padding: 18px 24px;

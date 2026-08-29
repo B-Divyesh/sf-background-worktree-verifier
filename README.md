@@ -29,6 +29,8 @@ Edit `.worktree-verifier.toml` to list each worktree and its fast, opt-in
 checks:
 
 ```toml
+command_timeout_seconds = 60
+
 [server]
 address = "127.0.0.1:4318"
 poll_seconds = 3
@@ -51,6 +53,10 @@ Watch continuously and open the printed localhost URL:
 worktree-verifier run
 ```
 
+The board starts before the first check and shows `RUNNING` while commands run.
+Each command stops after `command_timeout_seconds`. A timeout appears as
+`ERROR`; changing that worktree makes the watcher try its checks again.
+
 Worktree Verifier never discovers or runs commands automatically; only commands
 in your config run. Review them before use.
 
@@ -65,18 +71,9 @@ erases the last known passing commit.
 The watcher reruns only the configured worktree whose Git state changed. It
 does not discover commands or repositories for you.
 
-Configured commands run with the permissions of the account that starts the
-CLI. There is no hidden command sandbox. For an explicit Linux filesystem and
-network boundary, wrap a check with [Bubblewrap](https://github.com/containers/bubblewrap)
-when it is available on your machine:
-
-```toml
-checks = ["bwrap --die-with-parent --unshare-net --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 --dev /dev --proc /proc --bind \"$PWD\" /work --chdir /work sh -lc 'cargo test'"]
-```
-
-This example makes the worktree writable at `/work`, does not mount your home
-directory, and blocks network access. Adapt the read-only runtime mounts for
-your operating system and toolchain.
+The CLI adds no isolation layer. Configured commands inherit its user identity,
+environment, and filesystem access. Use an operating-system sandbox when a
+command needs a stricter boundary.
 
 ## Try the isolated sample
 

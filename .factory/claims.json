@@ -28,6 +28,20 @@
     "sandbox": "fresh Git worktree and public run --once --json command; assert a declared marker exists and an undeclared marker does not"
   },
   {
+    "id": "configured-command-permissions",
+    "claim": "The CLI adds no isolation layer: configured commands inherit its user identity, environment, and filesystem access.",
+    "where": "README, /privacy, generated init config",
+    "test": "cargo test --test cli_claims claim_commands_inherit_cli_identity_environment_and_filesystem_access",
+    "sandbox": "fresh Git worktree and public run --once --json command; assert the child user ID matches the parent, an inherited environment value is visible, and the command can write beside its worktree"
+  },
+  {
+    "id": "bounded-command-timeout",
+    "claim": "The watcher serves RUNNING status before initial checks, stops each command at its configured timeout, and reruns after that worktree changes.",
+    "where": "README, generated init config, CLI status board",
+    "test": "cargo test --test cli_claims claim_board_starts_before_checks_and_recovers_after_a_command_timeout",
+    "sandbox": "fresh public watcher with a one-second limit and a 120-second command plus a delayed child write; assert immediate RUNNING, bounded ERROR, descendant cancellation, then PASS after a worktree change"
+  },
+  {
     "id": "fresh-last-pass",
     "claim": "The board keeps the last passing commit when a newer check fails, and never promotes a result for a commit that changed during its check.",
     "where": "landing board preview, README",

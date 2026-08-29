@@ -34,7 +34,7 @@ Removed sample worktrees.</code></pre></div><p class="demo-actions"><a class="bu
 
 function privacy() {
   document.title = 'Privacy — Worktree Verifier';
-  return shell(`<article class="legal"><h1>Privacy for Worktree Verifier</h1><p>The status board binds to 127.0.0.1 by default.</p><p>The documentation site sends no analytics or tracking requests.</p><p>Configured commands use the permissions your account already has. Review each command before adding it.</p></article>`);
+  return shell(`<article class="legal"><h1>Privacy for Worktree Verifier</h1><p>The status board binds to 127.0.0.1 by default.</p><p>The documentation site sends no analytics or tracking requests.</p><p>The CLI adds no isolation layer. Configured commands inherit its user identity, environment, and filesystem access.</p><p>Review each command before adding it.</p></article>`);
 }
 
 function terms() {

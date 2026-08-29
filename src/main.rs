@@ -9,18 +9,21 @@ use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const STATUS_REQUESTS_PER_SECOND: u32 = 60;
+const DEFAULT_COMMAND_TIMEOUT_SECONDS: u64 = 60;
 
 const DEFAULT_CONFIG: &str = r#"# Checks run only in the worktree listed under each entry.
 # Keep checks short and avoid shared build caches when worktrees run together.
-# Commands run with your normal user permissions. For a filesystem or network
-# boundary, wrap the command with your OS sandbox (see README for a bwrap recipe).
+# The CLI adds no isolation layer. Commands inherit its user, environment, and
+# filesystem access. Each command is stopped after command_timeout_seconds.
+command_timeout_seconds = 60
+
 [server]
 address = "127.0.0.1:4318"
 poll_seconds = 3
@@ -75,6 +78,8 @@ enum Commands {
 
 #[derive(Debug, Deserialize)]
 struct Config {
+    #[serde(default = "default_command_timeout")]
+    command_timeout_seconds: u64,
     #[serde(default)]
     server: ServerConfig,
     #[serde(default)]
@@ -101,6 +106,9 @@ fn default_address() -> String {
 }
 fn default_poll() -> u64 {
     3
+}
+fn default_command_timeout() -> u64 {
+    DEFAULT_COMMAND_TIMEOUT_SECONDS
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +139,7 @@ enum Status {
     Idle,
     Error,
     Stale,
+    Running,
 }
 
 fn main() -> Result<()> {
@@ -168,33 +177,28 @@ fn load(path: &Path) -> Result<Config> {
             path.display()
         );
     }
+    if cfg.command_timeout_seconds == 0 {
+        bail!("command_timeout_seconds must be at least 1")
+    }
     Ok(cfg)
 }
 
 fn run_from_config(path: &Path, once: bool, json: bool) -> Result<()> {
     let cfg = load(path)?;
-    let rows = Arc::new(Mutex::new(Vec::new()));
-    // A board result is a promise about the state the watcher is now tracking.
-    // Capture that baseline before publishing the initial rows: otherwise a
-    // client can react to the visible PASS, edit a worktree, and have that edit
-    // silently accepted as the baseline rather than scheduled for a check.
-    let initial = checked_all(&cfg.worktrees, &[]);
-    let mut previous = signatures(&cfg.worktrees);
-    *rows.lock().unwrap() = initial;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&*rows.lock().unwrap())?);
-        if has_failed(&rows.lock().unwrap()) {
+    let command_timeout = Duration::from_secs(cfg.command_timeout_seconds);
+    if once || json {
+        let initial = checked_all(&cfg.worktrees, &[], command_timeout);
+        if json {
+            println!("{}", serde_json::to_string_pretty(&initial)?);
+        } else {
+            print_rows(&initial);
+        }
+        if has_failed(&initial) {
             bail!("one or more worktree checks failed")
         }
         return Ok(());
     }
-    print_rows(&rows.lock().unwrap());
-    if once && has_failed(&rows.lock().unwrap()) {
-        bail!("one or more worktree checks failed")
-    }
-    if once {
-        return Ok(());
-    }
+
     let listener = TcpListener::bind(&cfg.server.address).with_context(|| {
         format!(
             "Status board could not bind {}. Choose a free loopback address in [server].address",
@@ -205,6 +209,7 @@ fn run_from_config(path: &Path, once: bool, json: bool) -> Result<()> {
         .local_addr()
         .map(|address| address.ip().is_loopback())
         .unwrap_or(false);
+    let rows = Arc::new(Mutex::new(running_rows(&cfg.worktrees, &[], None)));
     let board = rows.clone();
     thread::spawn(move || serve(listener, board, loopback_only));
     println!(
@@ -212,6 +217,15 @@ fn run_from_config(path: &Path, once: bool, json: bool) -> Result<()> {
         cfg.server.poll_seconds.max(1),
         cfg.server.address
     );
+
+    // A board result is a promise about the state the watcher is now tracking.
+    // Capture that baseline before publishing the initial rows: otherwise a
+    // client can react to the visible PASS, edit a worktree, and have that edit
+    // silently accepted as the baseline rather than scheduled for a check.
+    let initial = checked_all(&cfg.worktrees, &[], command_timeout);
+    let mut previous = signatures(&cfg.worktrees);
+    *rows.lock().unwrap() = initial;
+    print_rows(&rows.lock().unwrap());
     loop {
         thread::sleep(Duration::from_secs(cfg.server.poll_seconds.max(1)));
         let next = signatures(&cfg.worktrees);
@@ -223,7 +237,8 @@ fn run_from_config(path: &Path, once: bool, json: bool) -> Result<()> {
             .collect();
         if !changed.is_empty() {
             let prior = rows.lock().unwrap().clone();
-            let updated = checked_selected(&cfg.worktrees, &prior, &changed);
+            *rows.lock().unwrap() = running_rows(&cfg.worktrees, &prior, Some(&changed));
+            let updated = checked_selected(&cfg.worktrees, &prior, &changed, command_timeout);
             // Do not expose a rerun result until its post-check state has become
             // the watcher baseline. This preserves the same no-missed-edit
             // guarantee as startup while still ignoring a check's own output.
@@ -239,11 +254,15 @@ fn has_failed(rows: &[BoardRow]) -> bool {
         .any(|row| matches!(row.status, Status::Fail | Status::Error | Status::Stale))
 }
 
-fn checked_all(configs: &[WorktreeConfig], prior: &[BoardRow]) -> Vec<BoardRow> {
+fn checked_all(
+    configs: &[WorktreeConfig],
+    prior: &[BoardRow],
+    command_timeout: Duration,
+) -> Vec<BoardRow> {
     // Checks intentionally run serially: many test tools write shared caches.
     configs
         .iter()
-        .map(|spec| check_until_stable(spec, matching_row(prior, spec)))
+        .map(|spec| check_until_stable(spec, matching_row(prior, spec), command_timeout))
         .collect()
 }
 
@@ -251,12 +270,13 @@ fn checked_selected(
     configs: &[WorktreeConfig],
     prior: &[BoardRow],
     indexes: &[usize],
+    command_timeout: Duration,
 ) -> Vec<BoardRow> {
     let mut updated = prior.to_vec();
     for &index in indexes {
         let spec = &configs[index];
         let prior = matching_row(&updated, spec).cloned();
-        let row = check_until_stable(spec, prior.as_ref());
+        let row = check_until_stable(spec, prior.as_ref(), command_timeout);
         if index < updated.len() {
             updated[index] = row;
         } else {
@@ -266,6 +286,37 @@ fn checked_selected(
     updated
 }
 
+fn running_rows(
+    configs: &[WorktreeConfig],
+    prior: &[BoardRow],
+    indexes: Option<&[usize]>,
+) -> Vec<BoardRow> {
+    configs
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            let existing = matching_row(prior, spec);
+            if indexes.is_some_and(|selected| !selected.contains(&index)) {
+                return existing.cloned().unwrap_or_else(|| running_row(spec, None));
+            }
+            running_row(spec, existing)
+        })
+        .collect()
+}
+
+fn running_row(spec: &WorktreeConfig, prior: Option<&BoardRow>) -> BoardRow {
+    BoardRow {
+        name: spec.name.clone(),
+        path: spec.path.to_string_lossy().into_owned(),
+        commit: prior.map_or_else(|| "checking…".into(), |row| row.commit.clone()),
+        last_pass_commit: prior.and_then(|row| row.last_pass_commit.clone()),
+        changed_files: prior.map_or(0, |row| row.changed_files),
+        status: Status::Running,
+        finished_at: prior.map_or(0, |row| row.finished_at),
+        detail: "Smoke checks are running.".into(),
+    }
+}
+
 fn matching_row<'a>(rows: &'a [BoardRow], spec: &WorktreeConfig) -> Option<&'a BoardRow> {
     rows.iter()
         .find(|row| row.name == spec.name && row.path == spec.path.to_string_lossy())
@@ -273,19 +324,27 @@ fn matching_row<'a>(rows: &'a [BoardRow], spec: &WorktreeConfig) -> Option<&'a B
 
 const STALE_RECHECKS: usize = 3;
 
-fn check_until_stable(spec: &WorktreeConfig, prior: Option<&BoardRow>) -> BoardRow {
+fn check_until_stable(
+    spec: &WorktreeConfig,
+    prior: Option<&BoardRow>,
+    command_timeout: Duration,
+) -> BoardRow {
     let last_pass_commit = prior.and_then(|row| row.last_pass_commit.clone());
-    let mut latest = check_worktree(spec, last_pass_commit.clone());
+    let mut latest = check_worktree(spec, last_pass_commit.clone(), command_timeout);
     for _ in 0..STALE_RECHECKS {
         if !matches!(latest.status, Status::Stale) {
             return latest;
         }
-        latest = check_worktree(spec, last_pass_commit.clone());
+        latest = check_worktree(spec, last_pass_commit.clone(), command_timeout);
     }
     latest
 }
 
-fn check_worktree(spec: &WorktreeConfig, last_pass_commit: Option<String>) -> BoardRow {
+fn check_worktree(
+    spec: &WorktreeConfig,
+    last_pass_commit: Option<String>,
+    command_timeout: Duration,
+) -> BoardRow {
     let path = spec.path.to_string_lossy().into_owned();
     let now = now();
     if !spec.path.is_dir() {
@@ -338,14 +397,30 @@ fn check_worktree(spec: &WorktreeConfig, last_pass_commit: Option<String>) -> Bo
     }
     let mut failure = None;
     for command in &spec.checks {
-        match shell(&spec.path, command) {
-            Ok(output) if output.status.success() => {}
-            Ok(_output) => {
-                failure = Some(format!("Failed: {}", command));
+        match shell(&spec.path, command, command_timeout) {
+            Ok(CommandOutcome::Finished(status)) if status.success() => {}
+            Ok(CommandOutcome::Finished(_)) => {
+                failure = Some((Status::Fail, format!("Failed: {}", command)));
+                break;
+            }
+            Ok(CommandOutcome::TimedOut) => {
+                failure = Some((
+                    Status::Error,
+                    format!(
+                        "Timed out after {} second{}: {}",
+                        command_timeout.as_secs(),
+                        if command_timeout.as_secs() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        },
+                        command
+                    ),
+                ));
                 break;
             }
             Err(_) => {
-                failure = Some(format!("Could not start: {}", command));
+                failure = Some((Status::Error, format!("Could not start: {}", command)));
                 break;
             }
         }
@@ -374,18 +449,14 @@ fn check_worktree(spec: &WorktreeConfig, last_pass_commit: Option<String>) -> Bo
             detail: "Worktree changed while its checks ran. Rechecking the new snapshot.".into(),
         };
     }
-    if let Some(detail) = failure {
+    if let Some((status, detail)) = failure {
         return BoardRow {
             name: spec.name.clone(),
             path,
             commit: before.commit,
             last_pass_commit,
             changed_files: before.changed_files,
-            status: if detail.starts_with("Could not start") {
-                Status::Error
-            } else {
-                Status::Fail
-            },
+            status,
             finished_at: now,
             detail,
         };
@@ -406,7 +477,12 @@ fn check_worktree(spec: &WorktreeConfig, last_pass_commit: Option<String>) -> Bo
     }
 }
 
-fn shell(dir: &Path, command: &str) -> std::io::Result<std::process::Output> {
+enum CommandOutcome {
+    Finished(std::process::ExitStatus),
+    TimedOut,
+}
+
+fn shell(dir: &Path, command: &str, timeout: Duration) -> std::io::Result<CommandOutcome> {
     #[cfg(windows)]
     let mut child = {
         let mut c = Command::new("cmd");
@@ -419,7 +495,40 @@ fn shell(dir: &Path, command: &str) -> std::io::Result<std::process::Output> {
         c.args(["-lc", command]);
         c
     };
-    child.current_dir(dir).output()
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        child.process_group(0);
+    }
+    let mut child = child
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(CommandOutcome::Finished(status));
+        }
+        if started.elapsed() >= timeout {
+            terminate_command(&mut child);
+            return Ok(CommandOutcome::TimedOut);
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn terminate_command(child: &mut Child) {
+    #[cfg(unix)]
+    unsafe {
+        // The shell starts in its own process group, so descendants such as a
+        // long-running test process cannot outlive the timeout.
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill();
+    let _ = child.wait();
 }
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
     Command::new("git")
@@ -500,6 +609,7 @@ fn print_rows(rows: &[BoardRow]) {
                 Status::Idle => "IDLE",
                 Status::Error => "ERROR",
                 Status::Stale => "STALE",
+                Status::Running => "RUNNING",
             },
             row.commit,
             row.changed_files,
@@ -589,13 +699,13 @@ fn board_headers() -> &'static str {
     "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: strict-origin-when-cross-origin\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n"
 }
 fn board_html(rows: &[BoardRow], loopback_only: bool) -> String {
-    let cards: String = rows.iter().map(|r| format!("<li><b>{}</b><span class=\"{}\">{}</span><small>Current: {} · Last pass: {} · {} changed files</small><p>{}</p></li>", esc(&r.name), match r.status { Status::Pass => "pass", Status::Fail => "fail", Status::Idle => "idle", Status::Error => "error", Status::Stale => "stale" }, match r.status { Status::Pass => "PASS", Status::Fail => "FAIL", Status::Idle => "IDLE", Status::Error => "ERROR", Status::Stale => "STALE" }, esc(&r.commit), esc(r.last_pass_commit.as_deref().unwrap_or("none")), r.changed_files, esc(&r.detail))).collect();
+    let cards: String = rows.iter().map(|r| format!("<li><b>{}</b><span class=\"{}\">{}</span><small>Current: {} · Last pass: {} · {} changed files</small><p>{}</p></li>", esc(&r.name), match r.status { Status::Pass => "pass", Status::Fail => "fail", Status::Idle => "idle", Status::Error => "error", Status::Stale => "stale", Status::Running => "running" }, match r.status { Status::Pass => "PASS", Status::Fail => "FAIL", Status::Idle => "IDLE", Status::Error => "ERROR", Status::Stale => "STALE", Status::Running => "RUNNING" }, esc(&r.commit), esc(r.last_pass_commit.as_deref().unwrap_or("none")), r.changed_files, esc(&r.detail))).collect();
     let reachability = if loopback_only {
         "This board listens only on this computer."
     } else {
         "This board may be reachable from your network. Set <code>[server].address</code> to <code>127.0.0.1</code> to keep it on this computer."
     };
-    format!("<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>Worktree Verifier status</title><style>body{{background:#f5eedb;color:#17202b;font:16px system-ui;margin:0;padding:2rem}}main{{max-width:50rem;margin:auto}}li{{border-top:2px solid #b8ad94;padding:1rem 0;list-style:none}}span{{float:right;font-weight:700}}.pass{{color:#25674e}}.fail,.error{{color:#b84531}}.idle,.stale{{color:#a36313}}small{{display:block;color:#48515a;margin-top:.4rem}}p{{margin:.5rem 0 0}}</style><main><h1>Worktree status</h1><p>{reachability}</p><ul>{cards}</ul></main></html>")
+    format!("<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>Worktree Verifier status</title><style>body{{background:#f5eedb;color:#17202b;font:16px system-ui;margin:0;padding:2rem}}main{{max-width:50rem;margin:auto}}li{{border-top:2px solid #b8ad94;padding:1rem 0;list-style:none}}span{{float:right;font-weight:700}}.pass{{color:#25674e}}.fail,.error{{color:#b84531}}.idle,.stale{{color:#92570e}}.running{{color:#183a59}}small{{display:block;color:#48515a;margin-top:.4rem}}p{{margin:.5rem 0 0}}@media(max-width:30rem){{body{{padding:1rem}}}}</style><main><h1>Worktree status</h1><p>{reachability}</p><ul>{cards}</ul></main></html>")
 }
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -701,6 +811,7 @@ mod tests {
                 checks: vec!["true".into()],
             },
             None,
+            Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECONDS),
         );
         assert!(matches!(row.status, Status::Error));
         assert!(row.detail.contains("Check path"));
@@ -732,6 +843,7 @@ mod tests {
                 checks: vec![command],
             },
             None,
+            Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECONDS),
         );
         assert!(matches!(row.status, Status::Pass));
         assert_eq!(fs::read_to_string(marker).unwrap(), "yes");
@@ -769,6 +881,7 @@ mod tests {
                 checks: vec![format!("touch {}", marker.display())],
             },
             None,
+            Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECONDS),
         );
         assert!(matches!(row.status, Status::Error));
         assert!(row.detail.contains("not a Git worktree"));

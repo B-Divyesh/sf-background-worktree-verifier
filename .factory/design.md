@@ -15,10 +15,10 @@ dashboard language and generic SaaS panels.
 | paper | `#f5eedb` | warm page background |
 | ink | `#17202b` | headings and body text |
 | muted-ink | `#48515a` | supporting copy |
-| navy | `#183a59` | header, terminal, links |
+| navy | `#183a59` | header, terminal, links, running status |
 | vermilion | `#b84531` | primary action and failures |
 | moss | `#25674e` | passing status |
-| ochre | `#a36313` | running / stale status |
+| ochre | `#92570e` | idle / stale status; 5.05:1 on paper |
 | line | `#b8ad94` | rules and registration marks |
 
 The site is deliberately single-mode: warm stock is part of the print thesis.

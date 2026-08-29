@@ -1,7 +1,10 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import AxeBuilder from '@axe-core/playwright';
@@ -20,6 +23,22 @@ async function waitForSite() {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   throw new Error('Vite preview did not start');
+}
+
+async function freePort() {
+  return new Promise((resolve, reject) => {
+    const socket = createServer();
+    socket.once('error', reject);
+    socket.listen(0, '127.0.0.1', () => {
+      const { port } = socket.address();
+      socket.close(error => error ? reject(error) : resolve(port));
+    });
+  });
+}
+
+function git(directory, ...args) {
+  const result = spawnSync('git', args, { cwd: directory, encoding: 'utf8' });
+  assert.equal(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr}`);
 }
 await waitForSite();
 after(() => server.kill());
@@ -133,6 +152,68 @@ test('browser desktop and 390px mobile have no serious axe findings, route focus
     }
   } finally {
     await browser.close();
+  }
+});
+
+test('real CLI status board passes accessibility checks on desktop and 390px mobile', { timeout: 60000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'wtv-board-a11y-'));
+  const repo = join(root, 'checkout');
+  const port = await freePort();
+  let watcher;
+  let browser;
+  try {
+    await mkdir(repo);
+    git(repo, 'init', '-q');
+    git(repo, 'config', 'user.email', 'test@worktree-verifier.local');
+    git(repo, 'config', 'user.name', 'Worktree Verifier test');
+    await writeFile(join(repo, 'source.txt'), 'board accessibility\n');
+    git(repo, 'add', 'source.txt');
+    git(repo, 'commit', '-qm', 'Seed board accessibility test');
+    const config = join(root, 'worktree-verifier.toml');
+    await writeFile(config, `command_timeout_seconds = 2\n\n[server]\naddress = "127.0.0.1:${port}"\npoll_seconds = 1\n\n[[worktrees]]\nname = "idle-check"\npath = ${JSON.stringify(repo)}\nchecks = []\n\n[[worktrees]]\nname = "stale-check"\npath = ${JSON.stringify(repo)}\nchecks = ["printf x >> source.txt"]\n`);
+    const binary = fileURLToPath(new URL('../../target/debug/worktree-verifier', import.meta.url));
+    watcher = spawn(binary, ['run', '--config', config], { stdio: 'ignore' });
+    const board = `http://127.0.0.1:${port}`;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        const response = await fetch(`${board}/status.json`);
+        if (response.ok) {
+          const rows = await response.json();
+          if (rows[0]?.status === 'idle' && rows[1]?.status === 'stale') break;
+        }
+      } catch {}
+      assert.ok(attempt < 49, 'real status board did not reach IDLE');
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    browser = await chromium.launch({ headless: true });
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      const context = await browser.newContext({ viewport });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+      page.on('pageerror', error => errors.push(error.message));
+      await page.goto(board, { waitUntil: 'networkidle' });
+      assert.equal(await page.locator('html').getAttribute('lang'), 'en');
+      assert.equal(await page.locator('h1').count(), 1);
+      assert.equal(await page.locator('main').count(), 1);
+      assert.equal(await page.locator('.idle').textContent(), 'IDLE');
+      assert.equal(await page.locator('.stale').textContent(), 'STALE');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      const scan = await new AxeBuilder({ page }).analyze();
+      assert.deepEqual(scan.violations.filter(v => ['serious', 'critical'].includes(v.impact)), []);
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+  } finally {
+    if (browser) await browser.close();
+    if (watcher) {
+      if (watcher.exitCode === null) {
+        watcher.kill();
+        await new Promise(resolve => watcher.once('exit', resolve));
+      }
+    }
+    await rm(root, { recursive: true, force: true });
   }
 });
 

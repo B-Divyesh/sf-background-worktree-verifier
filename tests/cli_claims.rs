@@ -76,8 +76,17 @@ fn toml_string(value: &str) -> String {
 }
 
 fn write_config(path: &Path, address: &str, worktrees: &[(&str, &Path, &[&str])]) {
+    write_config_with_timeout(path, address, 60, worktrees);
+}
+
+fn write_config_with_timeout(
+    path: &Path,
+    address: &str,
+    command_timeout_seconds: u64,
+    worktrees: &[(&str, &Path, &[&str])],
+) {
     let mut body = format!(
-        "[server]\naddress = {}\npoll_seconds = 1\n",
+        "command_timeout_seconds = {command_timeout_seconds}\n\n[server]\naddress = {}\npoll_seconds = 1\n",
         toml_string(address)
     );
     for (name, directory, checks) in worktrees {
@@ -403,6 +412,51 @@ fn claim_public_cli_runs_only_declared_commands() {
 }
 
 #[test]
+// @claim:configured-command-permissions
+fn claim_commands_inherit_cli_identity_environment_and_filesystem_access() {
+    let root = temp_dir("wtv-command-permissions-claim");
+    let repo = root.join("checkout");
+    fs::create_dir_all(&repo).expect("create repo");
+    init_repo(&repo, &[("source.txt", "permission check\n")]);
+    let config = root.join("worktree-verifier.toml");
+    write_config(
+        &config,
+        &free_address(),
+        &[(
+            "checkout",
+            &repo,
+            &["printf '%s' \"$WTV_PERMISSION_PROBE\" > ../inherited-env; id -u > ../child-uid"],
+        )],
+    );
+    let output = cli()
+        .args(["run", "--config"])
+        .arg(&config)
+        .args(["--once", "--json"])
+        .env("WTV_PERMISSION_PROBE", "visible-to-check")
+        .output()
+        .expect("run permission probe");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("inherited-env")).unwrap(),
+        "visible-to-check"
+    );
+    let parent_uid = Command::new("id")
+        .arg("-u")
+        .output()
+        .expect("read parent user id");
+    assert!(parent_uid.status.success());
+    assert_eq!(
+        fs::read_to_string(root.join("child-uid")).unwrap().trim(),
+        String::from_utf8(parent_uid.stdout).unwrap().trim()
+    );
+    fs::remove_dir_all(root).expect("remove permission fixture");
+}
+
+#[test]
 // @claim:fresh-last-pass
 fn claim_watcher_keeps_the_last_pass_and_never_promotes_an_unchecked_commit() {
     let root = temp_dir("wtv-fresh-last-pass-claim");
@@ -441,10 +495,8 @@ fn claim_watcher_keeps_the_last_pass_and_never_promotes_an_unchecked_commit() {
         &baseline_blocked,
         "watcher did not reach its startup baseline scan",
     );
-    assert!(
-        TcpStream::connect(&address).is_err(),
-        "status board became visible before its startup baseline completed"
-    );
+    let startup = wait_for_status(&address, |rows| rows[0]["status"] == "running");
+    assert_eq!(startup[0]["detail"], "Smoke checks are running.");
     fs::write(&baseline_release, "continue\n").expect("release startup baseline");
     let initial = wait_for_status(&address, |rows| {
         rows[0]["status"] == "pass" && rows[0]["last_pass_commit"] == old_commit
@@ -588,4 +640,65 @@ fn watcher_binds_before_reporting_ready_and_handles_slow_clients() {
     assert!(response.contains("Content-Security-Policy:"));
     stop_watcher(&mut watcher);
     fs::remove_dir_all(root).expect("remove server fixture");
+}
+
+#[test]
+// @claim:bounded-command-timeout
+fn claim_board_starts_before_checks_and_recovers_after_a_command_timeout() {
+    let root = temp_dir("wtv-command-timeout-claim");
+    let generated = root.join("generated.toml");
+    let init = cli()
+        .args(["init", "--config"])
+        .arg(&generated)
+        .output()
+        .expect("generate default timeout config");
+    assert!(init.status.success());
+    assert!(
+        fs::read_to_string(&generated)
+            .expect("read generated timeout config")
+            .contains("command_timeout_seconds = 60"),
+        "generated config must document the finite default timeout"
+    );
+    let repo = root.join("checkout");
+    fs::create_dir_all(&repo).expect("create repo");
+    init_repo(&repo, &[("source.txt", "timeout check\n")]);
+    let address = free_address();
+    let config = root.join("worktree-verifier.toml");
+    write_config_with_timeout(
+        &config,
+        &address,
+        1,
+        &[(
+            "timeout-case",
+            &repo,
+            &["test -f recover || (sh -c 'sleep 2; touch ../late-write' & sleep 120)"],
+        )],
+    );
+
+    let started = Instant::now();
+    let mut watcher = start_watcher(&config);
+    let running = wait_for_status(&address, |rows| rows[0]["status"] == "running");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "board did not expose RUNNING before the command timeout"
+    );
+    assert_eq!(running[0]["detail"], "Smoke checks are running.");
+
+    let timed_out = wait_for_status(&address, |rows| rows[0]["status"] == "error");
+    assert_eq!(
+        timed_out[0]["detail"],
+        "Timed out after 1 second: test -f recover || (sh -c 'sleep 2; touch ../late-write' & sleep 120)"
+    );
+    thread::sleep(Duration::from_millis(1_300));
+    assert!(
+        !root.join("late-write").exists(),
+        "a descendant of the timed-out command kept running"
+    );
+
+    fs::write(repo.join("recover"), "allow the next check to finish\n")
+        .expect("change worktree after timeout");
+    let recovered = wait_for_status(&address, |rows| rows[0]["status"] == "pass");
+    assert_eq!(recovered[0]["detail"], "1 smoke check passed");
+    stop_watcher(&mut watcher);
+    fs::remove_dir_all(root).expect("remove timeout fixture");
 }
