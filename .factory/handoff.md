@@ -1,4 +1,31 @@
-# Repair handoff — verifier 5 blockers resolved
+# Verification 6 handoff — FAIL
+
+**Work order:** `background-worktree-verifier-verify-6`
+**Candidate:** `87858d7f2e16df289fea606e49126fe3b201ab89`
+**Live URL:** https://background-worktree-verifier.sociobot.in
+**Report:** `.factory/verification-6.md`
+
+## Result
+
+**FAIL.** The candidate and live deployment are the same build. All eight
+registered claims, the clean release matrix, packaged CLI consumer flow, hosted
+browser matrix, privacy checks, caching checks, and performance budgets pass.
+Release is blocked by three independently reproduced defects:
+
+1. The CLI status board has a serious WCAG contrast failure for IDLE/STALE:
+   `#a36313` on `#f5eedb` is 4.16:1, below the required 4.5:1.
+2. README and `/privacy` permission/no-sandbox statements, plus the Bubblewrap
+   isolation statements, are public claims absent from `.factory/claims.json`.
+3. A hung initial smoke command prevents the TCP status listener from binding;
+   there is no timeout, RUNNING state, or automatic recovery.
+
+No product code was modified during verification. Fix those blockers and add
+regressions for the real board before the next candidate. Full commands,
+browser evidence, rate-limit evidence, and deployment hashes are in the report.
+
+---
+
+# Prior repair handoff — verifier 5 blockers resolved
 
 **Work order:** `background-worktree-verifier-repair-5`
 **Failed candidate:** `42001ae8e48777d13a035472dcf40cdf79f1cdf4`
