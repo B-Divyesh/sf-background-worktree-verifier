@@ -1,53 +1,48 @@
 # Verification handoff — FAIL
 
-Candidate `36b9d790a45f36dd3912d74e92c8b38ef7710992` was independently verified on
-2026-08-28 against https://background-worktree-verifier.sociobot.in.
+Candidate `29b09b6bc49710ab1e79c131913af6aad048e10f` was independently
+verified on 2026-08-29 against
+https://background-worktree-verifier.sociobot.in.
 
 ## Result
 
-**FAIL.** This is not a deployment-only result. The live static artifact is
-byte-for-byte identical to the candidate build, its real 404 is deployed, all
-listed claim commands pass, all clean build/test/lint/package gates pass, the
-rate limit works at request 61, and Lighthouse/axe results are excellent.
+**FAIL.** Fresh live assets byte-match this candidate's production build, so
+this is not deployment-only. All three required claim commands, clean tests,
+build, formatting, Clippy, package verification, and fresh package install
+passed. The release is nevertheless blocked: the installed public CLI reported
+a PASS for a commit created while that check was already running, and the
+watcher discards the previous last-pass commit on a later failure. Both violate
+the researched brief's core freshness and attribution promise.
 
-The release is blocked because the CLI can report PASS for a commit created
-while its check was already running, and because a failing newer commit erases
-the actual last-pass commit. The live site also gives an unpublished
-`cargo install worktree-verifier` command, leaves SPA route focus on `<body>`,
-has sub-44px mobile targets, and does not register/test all public claims.
+The live site also has an unavailable `cargo install worktree-verifier` path,
+unregistered/insufficient public claim tests, route focus left on body, and
+sub-44px mobile targets. The core issues were reproduced from a packaged
+fresh-root install, not inferred from source.
 
-Full evidence and all defects by severity are in
-[`.factory/verification-2.md`](verification-2.md).
+Full exact evidence, all checks, rate-limit observation, privacy/headers,
+browser checks, Lighthouse results, and defects by severity are in
+[`.factory/verification-3.md`](verification-3.md).
 
-## Commands verified
+## Verification commands
 
 ```sh
-npm ci
 cargo test -- claim_demo_runs_three_isolated_checks
 cargo test -- claim_loopback_is_default
 cargo test -- claim_configured_command_runs_in_its_worktree
-cargo clean && npm test
+npm ci
+npm test
 npm run build
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo package --allow-dirty
-cargo install --path target/package/worktree-verifier-0.1.0 --root "$(mktemp -d)"
+cargo install --path target/package/worktree-verifier-0.1.0 --root <fresh-temp-root>
 ```
 
-All commands above passed. The installed binary was exercised with normal,
-failing, idle/error, missing, malformed, non-Git, demo, watcher, port-conflict,
-rate-burst, concurrent-client, and mid-check commit-change cases.
-
-Fresh live Lighthouse mobile results: performance 100, accessibility 100,
-best practices 100, SEO 100; LCP 1.144 s, TBT 52 ms, CLS 0, 59,005 B total.
-Live and loopback-board axe scans found zero serious/critical violations.
+No product code was modified during verification.
 
 ## Next steps
 
-Fix commit snapshot/last-pass semantics first, then the working install path,
-claims registry/tests, route focus, touch targets, listener concurrency/bind
-handling, changed-worktree scoping, and command sandbox documentation or
-enforcement. Re-run the exact claim commands before all other checks on the
-next candidate.
-
-No product code was modified during verification.
+Implement snapshot/stale-result and persistent last-pass semantics first; then
+fix the working installation path, claim coverage, mobile/route-focus
+accessibility, and watcher/server/sandbox defects. Re-run every listed claim
+command before the next candidate's broader suite.
