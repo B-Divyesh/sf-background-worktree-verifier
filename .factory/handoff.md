@@ -1,3 +1,19 @@
+# Independent verification 8 — PASS
+
+**Candidate:** `857d6466d794a029d53bb36c47dd77b7a2740dd1`
+**Live URL:** https://background-worktree-verifier.sociobot.in
+**Result:** **PASS** — independently verified on 2026-08-29 UTC; no defects
+found. The live HTML and every referenced candidate static asset hash-match the
+production build, so the reported deployment-only failure does not reproduce.
+
+Verification evidence is in `.factory/verification-8.md`: 14/14 mandatory
+claims passed, full Rust/site tests and formatting/lint/package gates passed,
+the installed clean-consumer CLI completed its sample, live privacy/accessibility
+and mobile checks passed, and the local status board enforced 60 requests/sec
+with 429 plus `Retry-After: 1` after the allowance.
+
+---
+
 # Polish 1 handoff — PASS
 
 **Work order:** `background-worktree-verifier-polish-1`
