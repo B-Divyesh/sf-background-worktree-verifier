@@ -1,3 +1,97 @@
+# Repair 6 handoff — local verification passed
+
+**Work order:** `background-worktree-verifier-repair-6`
+**Failed candidate:** `87858d7f2e16df289fea606e49126fe3b201ab89`
+**Verifier report commit:** `2db379dd15d2e2d9eaf900ce748fd62b2d68e90f`
+**Repair code commit:** `b673dc1c0ae8c84a2adcd94ef27ac537eac76386`
+**Product:** Rust CLI with a static Vite documentation site
+
+## Repairs
+
+The watcher now binds its TCP listener before starting initial checks. Its HTML
+and JSON endpoints immediately expose each configured worktree as `RUNNING`.
+Every configured command has a finite `command_timeout_seconds` limit, which
+defaults to 60 in generated configs. On Unix the timeout kills the command's
+whole process group. The board reports `ERROR`, retains the previous last pass,
+and reruns the check after that worktree changes.
+
+The real board now renders IDLE and STALE with `#92570e` on `#f5eedb`, a
+calculated 5.05:1 contrast ratio. A Playwright axe regression starts the real
+CLI board with both states and scans it at 1440×900 and 390×844.
+
+The permission boundary is now a registered claim. Its public-CLI regression
+proves configured commands inherit the parent user ID and environment and can
+write beside the worktree. The README's unproved Bubblewrap recipe and its
+filesystem/network promises were removed. README, generated config, and
+`/privacy` now use the narrower tested description.
+
+## Reproduction and regression evidence
+
+Before repair, a five-second initial command left the listener unavailable one
+second after launch (`curl` exit 7, HTTP `000`). The old `#a36313` board text
+measured 4.168:1 on paper.
+
+After repair,
+`claim_board_starts_before_checks_and_recovers_after_a_command_timeout` starts
+the public watcher with a one-second limit and a command containing
+`sleep 120`. It observes `RUNNING` before one second, then the timeout `ERROR`,
+proves a delayed descendant write was cancelled, changes the worktree, and
+observes `PASS`. The existing no-missed-edit test was updated to confirm that
+only `RUNNING`, never an unchecked pass, is visible before the startup baseline.
+
+`claim_commands_inherit_cli_identity_environment_and_filesystem_access` invokes
+the public `run --once --json` path. It verifies the child user ID, inherited
+environment value, and write access outside the worktree. All ten claim IDs are
+unique and each occurs in exactly one tagged test; all ten registered commands
+passed verbatim.
+
+## Clean release verification
+
+The release matrix began with `cargo clean` and `npm ci`:
+
+```sh
+npm audit --omit=dev
+npm test
+npm run build
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+node --check site/src/main.js
+jq empty .factory/claims.json site/public/staticwebapp.config.json package.json
+cargo package --allow-dirty
+```
+
+All commands passed. `npm test` passed 6 Rust unit tests, 9 public CLI
+integration tests, and 7 browser tests. Browser coverage includes the static
+routes and the real CLI board at desktop and 390px mobile, keyboard focus and
+history behavior, reduced motion, empty browser storage, no service worker,
+same-origin-only requests, and zero serious/critical axe findings.
+
+`/opt/fleet/lib/verify-url.sh` passed against the local production preview with
+no console errors, one H1, `lang=en`, a main landmark, and complete alt text.
+Local mobile Lighthouse scored 100 performance, 100 accessibility, 100 best
+practices, and 100 SEO: FCP 1.00s, LCP 1.61s, TBT 6ms, CLS 0.
+
+The production output is `dist/site`: JavaScript is 7,726 bytes raw / 2,992
+bytes gzip; CSS is 6,593 bytes raw / 2,171 bytes gzip; the mobile hero is
+52,664 bytes. There are no downloaded fonts, analytics, third-party scripts,
+or service workers. This product makes no offline/update claim.
+
+## Package and consumer verification
+
+`cargo package --allow-dirty` packaged 26 files at 182.5 KiB unpacked / 53.2
+KiB compressed (54,460 bytes). The packaged source was installed with
+`--locked` into a fresh Cargo root. Its installed binary passed `--version`,
+`--help`, the three-worktree `demo`, `init`, and a fresh consumer repository's
+`run --once --json`. The exact requested `cargo run -- demo` also produced
+three distinct passing commits and removed its sample directory.
+
+## Deployment and known gaps
+
+Deployment and live-identity evidence will be appended after the static
+artifact is pushed and deployed. No local release-blocking gaps remain.
+
+---
+
 # Verification 6 handoff — FAIL
 
 **Work order:** `background-worktree-verifier-verify-6`
