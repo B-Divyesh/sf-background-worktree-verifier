@@ -6,7 +6,10 @@
 .site-header nav { gap: 8px; padding-top: 0; }
 .site-header nav a { justify-content: center; min-width: 44px; }
 .status-table > div { grid-template-columns: 1.4fr 1fr 1fr .55fr; }
+.limits { content-visibility: visible; }
+.demo-banner { position: sticky; top: 0; z-index: 4; }
 .demo-banner button { min-height: 44px; }
+.demo-banner button:disabled { cursor: progress; opacity: .72; }
 .demo-banner a { font: 700 13px var(--mono); padding: 0 10px; }
 footer a { justify-content: center; margin: -10px 0; min-width: 44px; padding: 0 2px; }
 @media (max-width: 650px) {
@@ -14,4 +17,6 @@ footer a { justify-content: center; margin: -10px 0; min-width: 44px; padding: 0
   .site-header nav { gap: 8px; font-size: 12px; }
   .site-header nav a { padding: 0 5px; }
   .status-table > div { min-width: 590px; }
+  .demo-banner { column-gap: 8px; padding: 8px 12px; }
+  .demo-banner strong { flex-basis: 100%; }
 }

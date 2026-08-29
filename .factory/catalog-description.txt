@@ -1,0 +1,1 @@
+Check changed Git worktrees in the background and keep each branch's current result visible.

@@ -1,38 +1,59 @@
 [
   {
     "id": "demo-isolated-worktrees",
-    "claim": "The sample creates three separate temporary Git worktrees, runs one declared check in each, and removes them when it finishes.",
-    "where": "/demo, README",
+    "claim": "The sample prints its temporary location, creates three separate Git worktrees with distinct commits and one committed sample file each, runs one declared check in each, supports inspect and served-board modes, and removes the normal sample when it finishes.",
+    "where": "/demo, README, .factory/demo.md",
     "test": "cargo test --test cli_claims claim_demo_runs_three_isolated_checks_and_cleans_up",
-    "sandbox": "fresh integration-test process invokes the public demo command, inspects a kept sample's Git worktrees and commits, then asserts normal-demo cleanup"
+    "sandbox": "fresh integration-test process runs the public demo; inspects every kept worktree, commit, and sample file; starts and stops --serve; then asserts normal-demo cleanup"
+  },
+  {
+    "id": "init-config",
+    "claim": "The init command writes a commented, parseable configuration.",
+    "where": "README",
+    "test": "cargo test --test cli_claims claim_init_writes_a_commented_parseable_config",
+    "sandbox": "fresh temporary directory invokes the public init command, counts explanatory comments, and parses the generated TOML"
   },
   {
     "id": "loopback-default",
-    "claim": "The status board binds to localhost by default.",
-    "where": "landing boundaries, privacy",
+    "claim": "By default, only this computer can open the status board at 127.0.0.1.",
+    "where": "landing boundaries, README, /privacy",
     "test": "cargo test --test cli_claims claim_loopback_is_the_public_cli_default",
     "sandbox": "fresh integration-test process invokes the public init command and inspects its generated default server address"
   },
   {
     "id": "listener-reachability-guidance",
-    "claim": "The live status page identifies loopback-only listeners and warns when a configured listener may accept network connections.",
+    "claim": "The live status page identifies a board limited to this computer and warns when another device may reach the configured address.",
     "where": "CLI status page, README",
     "test": "cargo test --test cli_claims claim_status_page_describes_the_configured_listener",
-    "sandbox": "fresh public watcher serves the real board first on a loopback address and then on 0.0.0.0; assert the page describes each listener accurately"
+    "sandbox": "fresh public watcher serves the real board first on 127.0.0.1 and then on 0.0.0.0; assert the page describes each listener accurately"
   },
   {
     "id": "configured-commands",
     "claim": "The CLI runs only commands you put in its config.",
-    "where": "landing boundaries, README",
+    "where": "landing boundaries, README, /terms",
     "test": "cargo test --test cli_claims claim_public_cli_runs_only_declared_commands",
     "sandbox": "fresh Git worktree and public run --once --json command; assert a declared marker exists and an undeclared marker does not"
   },
   {
     "id": "configured-command-permissions",
-    "claim": "The CLI adds no isolation layer: configured commands inherit its user identity, environment, and filesystem access.",
-    "where": "README, /privacy, generated init config",
+    "claim": "The CLI adds no isolation layer: configured commands inherit its user identity, environment, filesystem access, and network access.",
+    "where": "landing boundaries, README, /privacy, generated init config",
     "test": "cargo test --test cli_claims claim_commands_inherit_cli_identity_environment_and_filesystem_access",
-    "sandbox": "fresh Git worktree and public run --once --json command; assert the child user ID matches the parent, an inherited environment value is visible, and the command can write beside its worktree"
+    "sandbox": "fresh Git worktree and local TCP listener; assert the configured command inherits identity and environment, writes beside the worktree, and reaches the listener"
+  },
+  {
+    "id": "board-fields",
+    "claim": "The local board shows each worktree's state, commit, and changed-file count.",
+    "where": "README, landing board preview",
+    "test": "cargo test --test cli_claims claim_json_board_reports_state_commit_and_changed_file_count",
+    "sandbox": "fresh changed Git worktree and public run --once --json command; assert the observed status, exact commit, and changed-file count"
+  },
+  {
+    "id": "one-shot-json",
+    "claim": "The CLI can run once for scripts or CI, print valid JSON, return meaningful PASS or FAIL exit codes, and leave no watcher running.",
+    "where": "README",
+    "test": "cargo test --test cli_claims claim_one_shot_json_runs_once_and_returns_meaningful_exit_codes",
+    "sandbox": "fresh Git worktree; invoke passing and failing public --once --json flows, parse both outputs, count one check run, inspect exit codes, and verify the board port stays closed"
   },
   {
     "id": "bounded-command-timeout",
@@ -57,16 +78,23 @@
   },
   {
     "id": "demo-browser-sandbox",
-    "claim": "Demo — sample data, nothing is saved.",
-    "where": "/demo",
+    "claim": "The one-click ?demo=1 recording is isolated, replayable, resettable, and saves no browser data.",
+    "where": "landing primary action, /?demo=1, /demo",
     "test": "npm run build:site && node --test --test-name-pattern='@claim:demo-browser-sandbox' site/test/site.test.mjs",
-    "sandbox": "fresh browser context visits /demo and asserts empty browser storage plus no service worker"
+    "sandbox": "fresh 390px browser context enters through the landing action, advances and resets the recording, checks the persistent banner and exits, then asserts empty storage and no service worker"
   },
   {
     "id": "static-no-analytics",
     "claim": "The documentation site sends no analytics or tracking requests.",
     "where": "/privacy, README",
     "test": "npm run build:site && node --test --test-name-pattern='@claim:static-no-analytics' site/test/site.test.mjs",
-    "sandbox": "fresh browser context records every landing and demo request and asserts each remains same-origin"
+    "sandbox": "fresh browser context records every landing, demo, privacy, and terms request and asserts each remains same-origin"
+  },
+  {
+    "id": "static-build-artifact",
+    "claim": "npm run build creates dist/site with index.html plus built /demo, /privacy, and /terms routes.",
+    "where": "README",
+    "test": "npm run build && node --test --test-name-pattern='@claim:static-build-artifact' site/test/site.test.mjs",
+    "sandbox": "clean checkout runs the documented build alias, then asserts the artifact root and route-specific HTML files, titles, descriptions, canonical URLs, and social metadata"
   }
 ]

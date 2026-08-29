@@ -300,7 +300,11 @@ fn claim_demo_runs_three_isolated_checks_and_cleans_up() {
         .lines()
         .find_map(|line| line.strip_prefix("Sample worktrees: "))
         .expect("kept demo root");
-    for name in ["checkout-ui", "checkout-api", "checkout-docs"] {
+    for (name, sample_file) in [
+        ("checkout-ui", "button.ts"),
+        ("checkout-api", "health.rs"),
+        ("checkout-docs", "guide.md"),
+    ] {
         let checkout = Path::new(kept_root).join(name);
         let output = Command::new("git")
             .args(["rev-parse", "--is-inside-work-tree"])
@@ -309,8 +313,69 @@ fn claim_demo_runs_three_isolated_checks_and_cleans_up() {
             .expect("inspect demo checkout");
         assert!(output.status.success(), "{name} is not a Git worktree");
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "true");
+        assert!(
+            checkout.join(sample_file).is_file(),
+            "{sample_file} is missing"
+        );
+        let commit = Command::new("git")
+            .args(["log", "-1", "--format=%s", "--", sample_file])
+            .current_dir(&checkout)
+            .output()
+            .expect("inspect sample-file commit");
+        assert!(commit.status.success());
+        assert!(
+            String::from_utf8_lossy(&commit.stdout).contains(&format!("Add {name} sample")),
+            "{sample_file} was not committed in {name}"
+        );
     }
     fs::remove_dir_all(kept_root).expect("remove kept sample root");
+
+    let mut served = cli()
+        .args(["demo", "--serve"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start served demo");
+    let served_rows = wait_for_status("127.0.0.1:4319", |rows| {
+        rows.as_array()
+            .is_some_and(|rows| rows.len() == 3 && rows.iter().all(|row| row["status"] == "pass"))
+    });
+    assert_eq!(served_rows.as_array().expect("served rows").len(), 3);
+    served.kill().expect("stop served demo");
+    let served_output = served.wait_with_output().expect("collect served demo");
+    assert!(
+        !served_output.status.success(),
+        "killed demo should be stopped"
+    );
+    let served_stdout = String::from_utf8_lossy(&served_output.stdout);
+    let served_root = served_stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("Sample worktrees: "))
+        .expect("served demo reports its temporary root");
+    assert!(
+        TcpStream::connect("127.0.0.1:4319").is_err(),
+        "served demo board remained available after shutdown"
+    );
+    fs::remove_dir_all(served_root).expect("remove served sample root");
+}
+
+#[test]
+// @claim:init-config
+fn claim_init_writes_a_commented_parseable_config() {
+    let root = temp_dir("wtv-init-config-claim");
+    let config = root.join("worktree-verifier.toml");
+    let output = cli()
+        .args(["init", "--config"])
+        .arg(&config)
+        .output()
+        .expect("run init");
+    assert!(output.status.success());
+    let body = fs::read_to_string(&config).expect("read generated config");
+    assert!(body.lines().filter(|line| line.starts_with('#')).count() >= 3);
+    let parsed: toml::Value = toml::from_str(&body).expect("parse generated config");
+    assert_eq!(parsed["server"]["address"].as_str(), Some("127.0.0.1:4318"));
+    assert_eq!(parsed["worktrees"].as_array().map(Vec::len), Some(1));
+    fs::remove_dir_all(root).expect("remove init fixture");
 }
 
 #[test]
@@ -412,21 +477,109 @@ fn claim_public_cli_runs_only_declared_commands() {
 }
 
 #[test]
+// @claim:board-fields
+fn claim_json_board_reports_state_commit_and_changed_file_count() {
+    let root = temp_dir("wtv-board-fields-claim");
+    let repo = root.join("checkout");
+    fs::create_dir_all(&repo).expect("create repo");
+    init_repo(&repo, &[("source.txt", "board fields\n")]);
+    fs::write(repo.join("changed.txt"), "untracked\n").expect("create changed file");
+    let expected_commit = short_commit(&repo);
+    let config = root.join("worktree-verifier.toml");
+    write_config(
+        &config,
+        &free_address(),
+        &[("checkout", &repo, &["test -f source.txt"])],
+    );
+    let output = cli()
+        .args(["run", "--config"])
+        .arg(&config)
+        .args(["--once", "--json"])
+        .output()
+        .expect("read public JSON board fields");
+    assert!(output.status.success());
+    let rows: Value = serde_json::from_slice(&output.stdout).expect("valid board JSON");
+    assert_eq!(rows[0]["status"], "pass");
+    assert_eq!(rows[0]["commit"], expected_commit);
+    assert_eq!(rows[0]["changed_files"], 1);
+    fs::remove_dir_all(root).expect("remove board-fields fixture");
+}
+
+#[test]
+// @claim:one-shot-json
+fn claim_one_shot_json_runs_once_and_returns_meaningful_exit_codes() {
+    let root = temp_dir("wtv-one-shot-json-claim");
+    let repo = root.join("checkout");
+    fs::create_dir_all(&repo).expect("create repo");
+    init_repo(&repo, &[("source.txt", "one shot\n")]);
+    let address = free_address();
+    let config = root.join("worktree-verifier.toml");
+    write_config(
+        &config,
+        &address,
+        &[(
+            "checkout",
+            &repo,
+            &["printf 'run\\n' >> ../runs; test -f source.txt"],
+        )],
+    );
+    let passed = cli()
+        .args(["run", "--config"])
+        .arg(&config)
+        .args(["--once", "--json"])
+        .output()
+        .expect("run passing one-shot JSON");
+    assert!(passed.status.success());
+    let passed_rows: Value = serde_json::from_slice(&passed.stdout).expect("passing JSON");
+    assert_eq!(passed_rows[0]["status"], "pass");
+    assert_eq!(
+        fs::read_to_string(root.join("runs"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert!(
+        TcpStream::connect(&address).is_err(),
+        "one-shot left a watcher running"
+    );
+
+    write_config(&config, &address, &[("checkout", &repo, &["false"])]);
+    let failed = cli()
+        .args(["run", "--config"])
+        .arg(&config)
+        .args(["--once", "--json"])
+        .output()
+        .expect("run failing one-shot JSON");
+    assert!(!failed.status.success());
+    let failed_rows: Value = serde_json::from_slice(&failed.stdout).expect("failure JSON");
+    assert_eq!(failed_rows[0]["status"], "fail");
+    fs::remove_dir_all(root).expect("remove one-shot fixture");
+}
+
+#[test]
 // @claim:configured-command-permissions
 fn claim_commands_inherit_cli_identity_environment_and_filesystem_access() {
     let root = temp_dir("wtv-command-permissions-claim");
     let repo = root.join("checkout");
     fs::create_dir_all(&repo).expect("create repo");
     init_repo(&repo, &[("source.txt", "permission check\n")]);
+    let listener = TcpListener::bind("127.0.0.1:0").expect("start local network probe");
+    let network_address = listener.local_addr().expect("network probe address");
+    let network_probe = thread::spawn(move || {
+        listener
+            .accept()
+            .map(|(_stream, _peer)| true)
+            .unwrap_or(false)
+    });
     let config = root.join("worktree-verifier.toml");
+    let command = format!(
+        "printf '%s' \"$WTV_PERMISSION_PROBE\" > ../inherited-env; id -u > ../child-uid; git ls-remote git://{network_address}/probe >/dev/null 2>&1 || true"
+    );
     write_config(
         &config,
         &free_address(),
-        &[(
-            "checkout",
-            &repo,
-            &["printf '%s' \"$WTV_PERMISSION_PROBE\" > ../inherited-env; id -u > ../child-uid"],
-        )],
+        &[("checkout", &repo, &[&command])],
     );
     let output = cli()
         .args(["run", "--config"])
@@ -453,6 +606,7 @@ fn claim_commands_inherit_cli_identity_environment_and_filesystem_access() {
         fs::read_to_string(root.join("child-uid")).unwrap().trim(),
         String::from_utf8(parent_uid.stdout).unwrap().trim()
     );
+    assert!(network_probe.join().expect("join network probe"));
     fs::remove_dir_all(root).expect("remove permission fixture");
 }
 
@@ -496,7 +650,7 @@ fn claim_watcher_keeps_the_last_pass_and_never_promotes_an_unchecked_commit() {
         "watcher did not reach its startup baseline scan",
     );
     let startup = wait_for_status(&address, |rows| rows[0]["status"] == "running");
-    assert_eq!(startup[0]["detail"], "Smoke checks are running.");
+    assert_eq!(startup[0]["detail"], "Checks are running.");
     fs::write(&baseline_release, "continue\n").expect("release startup baseline");
     let initial = wait_for_status(&address, |rows| {
         rows[0]["status"] == "pass" && rows[0]["last_pass_commit"] == old_commit
@@ -682,7 +836,7 @@ fn claim_board_starts_before_checks_and_recovers_after_a_command_timeout() {
         started.elapsed() < Duration::from_secs(1),
         "board did not expose RUNNING before the command timeout"
     );
-    assert_eq!(running[0]["detail"], "Smoke checks are running.");
+    assert_eq!(running[0]["detail"], "Checks are running.");
 
     let timed_out = wait_for_status(&address, |rows| rows[0]["status"] == "error");
     assert_eq!(
@@ -698,7 +852,7 @@ fn claim_board_starts_before_checks_and_recovers_after_a_command_timeout() {
     fs::write(repo.join("recover"), "allow the next check to finish\n")
         .expect("change worktree after timeout");
     let recovered = wait_for_status(&address, |rows| rows[0]["status"] == "pass");
-    assert_eq!(recovered[0]["detail"], "1 smoke check passed");
+    assert_eq!(recovered[0]["detail"], "1 check passed");
     stop_watcher(&mut watcher);
     fs::remove_dir_all(root).expect("remove timeout fixture");
 }

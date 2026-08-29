@@ -1,14 +1,13 @@
 # Worktree Verifier
 
-Run fast, declared smoke checks in separate Git worktrees. It is for developers
-who need to know which branch is fresh without switching worktrees.
+Run declared checks in separate Git worktrees. It is for developers who need
+current branch results without switching worktrees.
 
-It watches configured Git worktrees and serves a compact board on `127.0.0.1`
-with each worktree's state, commit, and changed-file count.
+The local board shows each worktree's state, commit, and changed-file count.
 
 ## Install
 
-Until published to crates.io, build it from a clone:
+Build it from a clone:
 
 ```sh
 git clone https://github.com/B-Divyesh/sf-background-worktree-verifier.git
@@ -17,16 +16,15 @@ cargo install --path .
 worktree-verifier --help
 ```
 
-## Use it
+## Configure and run Worktree Verifier
 
-Start with a commented config:
+Create a commented config:
 
 ```sh
 worktree-verifier init
 ```
 
-Edit `.worktree-verifier.toml` to list each worktree and its fast, opt-in
-checks:
+Edit `.worktree-verifier.toml` to list each worktree and its configured checks:
 
 ```toml
 command_timeout_seconds = 60
@@ -62,11 +60,11 @@ in your config run. Review them before use.
 
 ## Fresh results and command boundaries
 
-Before a smoke check starts, the watcher snapshots the worktree's commit and
-working state. If either changes while the command runs, it marks that attempt
-stale and checks the new snapshot before it can report a pass. The local board
-shows the current snapshot and `last_pass_commit`, so a later failure never
-erases the last known passing commit.
+Before a check starts, the watcher snapshots the worktree's commit and working
+state. If either changes during a check, the watcher marks that result stale.
+It checks the new snapshot before reporting a pass. The local board shows the
+current snapshot and `last_pass_commit`. A later failure never erases the last
+known passing commit.
 
 The watcher reruns only the configured worktree whose Git state changed. It
 does not discover commands or repositories for you.
@@ -81,18 +79,17 @@ command needs a stricter boundary.
 cargo run -- demo
 ```
 
-The demo creates `checkout-ui`, `checkout-api`, and `checkout-docs` as actual
-Git worktrees under a temporary directory. It commits a sample file and runs one
-declared smoke check in each, prints the location, and removes the directory.
-Use `cargo run -- demo --keep` to inspect it or `cargo run -- demo --serve` to
-open its localhost board.
+The demo creates `checkout-ui`, `checkout-api`, and `checkout-docs` as separate
+Git worktrees under a temporary directory. It commits one sample file in each
+worktree. It runs one declared check in each, prints the location, and removes
+the directory. Use `cargo run -- demo --keep` to inspect the files. Use `cargo
+run -- demo --serve` to open its board on this computer.
 
-The hosted documentation recording is available at `/demo` after running the
-site locally. See [.factory/demo.md](.factory/demo.md) for its sandbox details.
+Open `/?demo=1` for the hosted recording after running the site locally. The
+same recording is also available at `/demo`. See
+[.factory/demo.md](.factory/demo.md) for its sandbox details.
 
 ## Develop, test, and build
-
-Requirements: Rust stable and Node 20+.
 
 ```sh
 npm install
@@ -112,10 +109,9 @@ npm run dev
 
 ## Privacy and boundaries
 
-The CLI binds its board to loopback by default. The status page confirms a
-loopback-only listener and warns when your configured address may accept network
-connections. A command you configure may make network requests; review each
-command before adding it.
+By default, only this computer can open the board at `127.0.0.1`. The status
+page warns when another device may reach the configured address. A configured
+command keeps its network access. Review each command before adding it.
 
 The documentation site is static and sends no analytics or tracking requests.
 Its `/privacy` and `/terms` routes are included in the built site.

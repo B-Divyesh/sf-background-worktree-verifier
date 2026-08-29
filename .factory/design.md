@@ -36,8 +36,10 @@ so there is no font download. Spacing follows an 8px scale: 8, 16, 24, 32, 48,
 
 Links are underlined; controls are square, ink-stamped shapes with an
 offset-shadow press response. Status dots use a one-time 180ms entrance when a
-board appears. Under `prefers-reduced-motion`, transitions and animation are
-removed. Keyboard focus is a 3px vermilion outline.
+board appears. The demo replay reveals terminal lines in four short frames;
+Reset restores the complete first frame without motion. Under
+`prefers-reduced-motion`, transitions and CSS animation are removed. Keyboard
+focus is a 3px vermilion outline.
 
 ## Asset plan and provenance
 

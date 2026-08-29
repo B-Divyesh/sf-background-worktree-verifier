@@ -2,7 +2,7 @@
 name = "worktree-verifier"
 version = "0.1.0"
 edition = "2021"
-description = "Local smoke checks for configured Git worktrees"
+description = "Configured checks for separate Git worktrees"
 license = "MIT"
 repository = "https://github.com/B-Divyesh/sf-background-worktree-verifier"
 exclude = ["site/**", ".factory/source-assets/**", "dist/**"]

@@ -1,4 +1,4 @@
-//! A small local verifier for intentionally configured Git worktrees.
+//! A small verifier for intentionally configured Git worktrees.
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
@@ -19,9 +19,9 @@ const STATUS_REQUESTS_PER_SECOND: u32 = 60;
 const DEFAULT_COMMAND_TIMEOUT_SECONDS: u64 = 60;
 
 const DEFAULT_CONFIG: &str = r#"# Checks run only in the worktree listed under each entry.
-# Keep checks short and avoid shared build caches when worktrees run together.
-# The CLI adds no isolation layer. Commands inherit its user, environment, and
-# filesystem access. Each command is stopped after command_timeout_seconds.
+# Avoid shared build caches when worktree checks run together.
+# The CLI adds no isolation layer. Commands inherit its user, environment,
+# filesystem, and network access. Each command stops after the timeout below.
 command_timeout_seconds = 60
 
 [server]
@@ -38,7 +38,7 @@ checks = ["npm test -- --runInBand"]
 #[command(
     name = "worktree-verifier",
     version,
-    about = "Run local smoke checks in configured worktrees."
+    about = "Run configured checks in separate Git worktrees."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -160,7 +160,7 @@ fn init(path: &Path, force: bool) -> Result<()> {
     }
     fs::write(path, DEFAULT_CONFIG).with_context(|| format!("writing {}", path.display()))?;
     println!(
-        "Wrote {}. Edit its paths and smoke commands, then run worktree-verifier run.",
+        "Wrote {}. Edit its paths and commands, then run worktree-verifier run.",
         path.display()
     );
     Ok(())
@@ -313,7 +313,7 @@ fn running_row(spec: &WorktreeConfig, prior: Option<&BoardRow>) -> BoardRow {
         changed_files: prior.map_or(0, |row| row.changed_files),
         status: Status::Running,
         finished_at: prior.map_or(0, |row| row.finished_at),
-        detail: "Smoke checks are running.".into(),
+        detail: "Checks are running.".into(),
     }
 }
 
@@ -392,7 +392,7 @@ fn check_worktree(
             changed_files: before.changed_files,
             status: Status::Idle,
             finished_at: now,
-            detail: "No checks declared. Add a smoke command to checks.".into(),
+            detail: "No checks declared. Add a command to checks.".into(),
         };
     }
     let mut failure = None;
@@ -470,7 +470,7 @@ fn check_worktree(
         status: Status::Pass,
         finished_at: now,
         detail: format!(
-            "{} smoke check{} passed",
+            "{} check{} passed",
             spec.checks.len(),
             if spec.checks.len() == 1 { "" } else { "s" }
         ),
