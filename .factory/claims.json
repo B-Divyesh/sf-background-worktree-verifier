@@ -1,23 +1,51 @@
 [
   {
     "id": "demo-isolated-worktrees",
-    "claim": "The sample creates three separate temporary worktrees and runs one declared check in each.",
+    "claim": "The sample creates three separate temporary Git worktrees, runs one declared check in each, and removes them when it finishes.",
     "where": "/demo, README",
-    "test": "cargo test -- claim_demo_runs_three_isolated_checks",
-    "sandbox": "fresh cargo integration-test process; invoke worktree-verifier demo, assert three passing rows, three distinct commit hashes, and cleanup"
+    "test": "cargo test --test cli_claims claim_demo_runs_three_isolated_checks_and_cleans_up",
+    "sandbox": "fresh integration-test process invokes the public demo command, inspects a kept sample's Git worktrees and commits, then asserts normal-demo cleanup"
   },
   {
     "id": "loopback-default",
     "claim": "The status board binds to localhost by default.",
     "where": "landing boundaries, privacy",
-    "test": "cargo test -- claim_loopback_is_default",
-    "sandbox": "fresh process; inspect the default server configuration"
+    "test": "cargo test --test cli_claims claim_loopback_is_the_public_cli_default",
+    "sandbox": "fresh integration-test process invokes the public init command and inspects its generated default server address"
   },
   {
     "id": "configured-commands",
     "claim": "The CLI runs only commands you put in its config.",
-    "where": "landing boundaries",
-    "test": "cargo test -- claim_configured_command_runs_in_its_worktree",
-    "sandbox": "fresh Git worktree; run a declared smoke command and assert its observable marker"
+    "where": "landing boundaries, README",
+    "test": "cargo test --test cli_claims claim_public_cli_runs_only_declared_commands",
+    "sandbox": "fresh Git worktree and public run --once --json command; assert a declared marker exists and an undeclared marker does not"
+  },
+  {
+    "id": "fresh-last-pass",
+    "claim": "The board keeps the last passing commit when a newer check fails, and never promotes a result for a commit that changed during its check.",
+    "where": "landing board preview, README",
+    "test": "cargo test --test cli_claims claim_watcher_keeps_the_last_pass_and_never_promotes_an_unchecked_commit",
+    "sandbox": "fresh public watcher; commit a new verdict while its declared check sleeps, then inspect status.json for the failing new commit and retained old last_pass_commit"
+  },
+  {
+    "id": "changed-worktree-only",
+    "claim": "When a worktree changes, the watcher reruns only its declared checks.",
+    "where": "landing setup steps, README",
+    "test": "cargo test --test cli_claims claim_watcher_reruns_only_the_changed_worktree",
+    "sandbox": "fresh public watcher with two Git worktrees; change one and assert its check marker changes while the other marker does not"
+  },
+  {
+    "id": "demo-browser-sandbox",
+    "claim": "Demo — sample data, nothing is saved.",
+    "where": "/demo",
+    "test": "npm run build:site && node --test --test-name-pattern='@claim:demo-browser-sandbox' site/test/site.test.mjs",
+    "sandbox": "fresh browser context visits /demo and asserts empty browser storage plus no service worker"
+  },
+  {
+    "id": "static-no-analytics",
+    "claim": "The documentation site sends no analytics or tracking requests.",
+    "where": "/privacy, README",
+    "test": "npm run build:site && node --test --test-name-pattern='@claim:static-no-analytics' site/test/site.test.mjs",
+    "sandbox": "fresh browser context records every landing and demo request and asserts each remains same-origin"
   }
 ]

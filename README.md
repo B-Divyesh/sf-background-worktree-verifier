@@ -11,6 +11,8 @@ with each worktree's state, commit, and changed-file count.
 Until published to crates.io, build it from a clone:
 
 ```sh
+git clone https://github.com/B-Divyesh/sf-background-worktree-verifier.git
+cd sf-background-worktree-verifier
 cargo install --path .
 worktree-verifier --help
 ```
@@ -52,6 +54,30 @@ worktree-verifier run
 Worktree Verifier never discovers or runs commands automatically; only commands
 in your config run. Review them before use.
 
+## Fresh results and command boundaries
+
+Before a smoke check starts, the watcher snapshots the worktree's commit and
+working state. If either changes while the command runs, it marks that attempt
+stale and checks the new snapshot before it can report a pass. The local board
+shows the current snapshot and `last_pass_commit`, so a later failure never
+erases the last known passing commit.
+
+The watcher reruns only the configured worktree whose Git state changed. It
+does not discover commands or repositories for you.
+
+Configured commands run with the permissions of the account that starts the
+CLI. There is no hidden command sandbox. For an explicit Linux filesystem and
+network boundary, wrap a check with [Bubblewrap](https://github.com/containers/bubblewrap)
+when it is available on your machine:
+
+```toml
+checks = ["bwrap --die-with-parent --unshare-net --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 --dev /dev --proc /proc --bind \"$PWD\" /work --chdir /work sh -lc 'cargo test'"]
+```
+
+This example makes the worktree writable at `/work`, does not mount your home
+directory, and blocks network access. Adapt the read-only runtime mounts for
+your operating system and toolchain.
+
 ## Try the isolated sample
 
 ```sh
@@ -92,8 +118,15 @@ npm run dev
 The CLI binds its board to loopback by default. A command you configure may make
 network requests; review each command before adding it.
 
-The documentation site is static and has no analytics. Its `/privacy` and
-`/terms` routes are included in the built site.
+The documentation site is static and sends no analytics or tracking requests.
+Its `/privacy` and `/terms` routes are included in the built site.
+
+## Deploy
+
+Build the static documentation artifact with `npm ci && npm run build`. Deploy
+the generated `dist/site` directory with the included
+`staticwebapp.config.json`; deployment infrastructure is managed by the
+factory.
 
 ## License
 

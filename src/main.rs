@@ -3,7 +3,9 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::hash_map::DefaultHasher,
     fs,
+    hash::{Hash, Hasher},
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
@@ -17,6 +19,8 @@ const STATUS_REQUESTS_PER_SECOND: u32 = 60;
 
 const DEFAULT_CONFIG: &str = r#"# Checks run only in the worktree listed under each entry.
 # Keep checks short and avoid shared build caches when worktrees run together.
+# Commands run with your normal user permissions. For a filesystem or network
+# boundary, wrap the command with your OS sandbox (see README for a bwrap recipe).
 [server]
 address = "127.0.0.1:4318"
 poll_seconds = 3
@@ -112,6 +116,7 @@ struct BoardRow {
     name: String,
     path: String,
     commit: String,
+    last_pass_commit: Option<String>,
     changed_files: usize,
     status: Status,
     finished_at: u64,
@@ -125,6 +130,7 @@ enum Status {
     Fail,
     Idle,
     Error,
+    Stale,
 }
 
 fn main() -> Result<()> {
@@ -183,9 +189,14 @@ fn run_from_config(path: &Path, once: bool, json: bool) -> Result<()> {
     if once {
         return Ok(());
     }
+    let listener = TcpListener::bind(&cfg.server.address).with_context(|| {
+        format!(
+            "Status board could not bind {}. Choose a free loopback address in [server].address",
+            cfg.server.address
+        )
+    })?;
     let board = rows.clone();
-    let address = cfg.server.address.clone();
-    thread::spawn(move || serve(address, board));
+    thread::spawn(move || serve(listener, board));
     println!(
         "Watching every {}s. Board: http://{}",
         cfg.server.poll_seconds.max(1),
@@ -195,26 +206,72 @@ fn run_from_config(path: &Path, once: bool, json: bool) -> Result<()> {
     loop {
         thread::sleep(Duration::from_secs(cfg.server.poll_seconds.max(1)));
         let next = signatures(&cfg.worktrees);
-        if next != previous {
-            check_all(&cfg.worktrees, &rows);
+        let changed: Vec<usize> = next
+            .iter()
+            .zip(&previous)
+            .enumerate()
+            .filter_map(|(index, (current, prior))| (current != prior).then_some(index))
+            .collect();
+        if !changed.is_empty() {
+            check_selected(&cfg.worktrees, &rows, &changed);
             print_rows(&rows.lock().unwrap());
-            previous = next;
+            // A smoke check may create its own build output. Record the state after
+            // that check so it does not cause an unrelated follow-up run.
+            previous = signatures(&cfg.worktrees);
         }
     }
 }
 
 fn has_failed(rows: &[BoardRow]) -> bool {
     rows.iter()
-        .any(|row| matches!(row.status, Status::Fail | Status::Error))
+        .any(|row| matches!(row.status, Status::Fail | Status::Error | Status::Stale))
 }
 
 fn check_all(configs: &[WorktreeConfig], rows: &Arc<Mutex<Vec<BoardRow>>>) {
     // Checks intentionally run serially: many test tools write shared caches.
-    let next: Vec<BoardRow> = configs.iter().map(check_worktree).collect();
+    let prior = rows.lock().unwrap().clone();
+    let next: Vec<BoardRow> = configs
+        .iter()
+        .map(|spec| check_until_stable(spec, matching_row(&prior, spec)))
+        .collect();
     *rows.lock().unwrap() = next;
 }
 
-fn check_worktree(spec: &WorktreeConfig) -> BoardRow {
+fn check_selected(configs: &[WorktreeConfig], rows: &Arc<Mutex<Vec<BoardRow>>>, indexes: &[usize]) {
+    let mut updated = rows.lock().unwrap().clone();
+    for &index in indexes {
+        let spec = &configs[index];
+        let prior = matching_row(&updated, spec).cloned();
+        let row = check_until_stable(spec, prior.as_ref());
+        if index < updated.len() {
+            updated[index] = row;
+        } else {
+            updated.push(row);
+        }
+    }
+    *rows.lock().unwrap() = updated;
+}
+
+fn matching_row<'a>(rows: &'a [BoardRow], spec: &WorktreeConfig) -> Option<&'a BoardRow> {
+    rows.iter()
+        .find(|row| row.name == spec.name && row.path == spec.path.to_string_lossy())
+}
+
+const STALE_RECHECKS: usize = 3;
+
+fn check_until_stable(spec: &WorktreeConfig, prior: Option<&BoardRow>) -> BoardRow {
+    let last_pass_commit = prior.and_then(|row| row.last_pass_commit.clone());
+    let mut latest = check_worktree(spec, last_pass_commit.clone());
+    for _ in 0..STALE_RECHECKS {
+        if !matches!(latest.status, Status::Stale) {
+            return latest;
+        }
+        latest = check_worktree(spec, last_pass_commit.clone());
+    }
+    latest
+}
+
+fn check_worktree(spec: &WorktreeConfig, last_pass_commit: Option<String>) -> BoardRow {
     let path = spec.path.to_string_lossy().into_owned();
     let now = now();
     if !spec.path.is_dir() {
@@ -222,6 +279,7 @@ fn check_worktree(spec: &WorktreeConfig) -> BoardRow {
             name: spec.name.clone(),
             path,
             commit: "—".into(),
+            last_pass_commit,
             changed_files: 0,
             status: Status::Error,
             finished_at: now,
@@ -233,58 +291,97 @@ fn check_worktree(spec: &WorktreeConfig) -> BoardRow {
             name: spec.name.clone(),
             path,
             commit: "—".into(),
+            last_pass_commit,
             changed_files: 0,
             status: Status::Error,
             finished_at: now,
             detail: "The configured path is not a Git worktree. Point it at a Git checkout.".into(),
         };
     }
+    let Some(before) = snapshot(&spec.path) else {
+        return BoardRow {
+            name: spec.name.clone(),
+            path,
+            commit: "—".into(),
+            last_pass_commit,
+            changed_files: 0,
+            status: Status::Error,
+            finished_at: now,
+            detail: "Could not snapshot this Git worktree. Check that Git is available.".into(),
+        };
+    };
     if spec.checks.is_empty() {
         return BoardRow {
             name: spec.name.clone(),
             path,
-            commit: git(&spec.path, &["rev-parse", "--short", "HEAD"])
-                .unwrap_or_else(|| "no commit".into()),
-            changed_files: changed_count(&spec.path),
+            commit: before.commit,
+            last_pass_commit,
+            changed_files: before.changed_files,
             status: Status::Idle,
             finished_at: now,
             detail: "No checks declared. Add a smoke command to checks.".into(),
         };
     }
+    let mut failure = None;
     for command in &spec.checks {
         match shell(&spec.path, command) {
             Ok(output) if output.status.success() => {}
             Ok(_output) => {
-                return BoardRow {
-                    name: spec.name.clone(),
-                    path,
-                    commit: git(&spec.path, &["rev-parse", "--short", "HEAD"])
-                        .unwrap_or_else(|| "no commit".into()),
-                    changed_files: changed_count(&spec.path),
-                    status: Status::Fail,
-                    finished_at: now,
-                    detail: format!("Failed: {}", command),
-                }
+                failure = Some(format!("Failed: {}", command));
+                break;
             }
             Err(_) => {
-                return BoardRow {
-                    name: spec.name.clone(),
-                    path,
-                    commit: "—".into(),
-                    changed_files: 0,
-                    status: Status::Error,
-                    finished_at: now,
-                    detail: format!("Could not start: {}", command),
-                }
+                failure = Some(format!("Could not start: {}", command));
+                break;
             }
         }
+    }
+    let Some(after) = snapshot(&spec.path) else {
+        return BoardRow {
+            name: spec.name.clone(),
+            path,
+            commit: "—".into(),
+            last_pass_commit,
+            changed_files: 0,
+            status: Status::Error,
+            finished_at: now,
+            detail: "Could not snapshot this Git worktree after its check.".into(),
+        };
+    };
+    if before != after {
+        return BoardRow {
+            name: spec.name.clone(),
+            path,
+            commit: after.commit,
+            last_pass_commit,
+            changed_files: after.changed_files,
+            status: Status::Stale,
+            finished_at: now,
+            detail: "Worktree changed while its checks ran. Rechecking the new snapshot.".into(),
+        };
+    }
+    if let Some(detail) = failure {
+        return BoardRow {
+            name: spec.name.clone(),
+            path,
+            commit: before.commit,
+            last_pass_commit,
+            changed_files: before.changed_files,
+            status: if detail.starts_with("Could not start") {
+                Status::Error
+            } else {
+                Status::Fail
+            },
+            finished_at: now,
+            detail,
+        };
     }
     BoardRow {
         name: spec.name.clone(),
         path,
-        commit: git(&spec.path, &["rev-parse", "--short", "HEAD"])
-            .unwrap_or_else(|| "no commit".into()),
-        changed_files: changed_count(&spec.path),
+        commit: before.commit.clone(),
+        last_pass_commit: Some(before.commit),
+        changed_files: before.changed_files,
         status: Status::Pass,
         finished_at: now,
         detail: format!(
@@ -322,10 +419,48 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
 fn is_git_worktree(dir: &Path) -> bool {
     git(dir, &["rev-parse", "--is-inside-work-tree"]).as_deref() == Some("true")
 }
-fn changed_count(dir: &Path) -> usize {
-    git(dir, &["status", "--porcelain"])
-        .map(|s| s.lines().count())
-        .unwrap_or(0)
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorktreeSnapshot {
+    commit: String,
+    porcelain: String,
+    unstaged_diff: String,
+    staged_diff: String,
+    untracked_content: u64,
+    changed_files: usize,
+}
+
+/// Capture the commit and visible working-tree state before and after a check.
+/// The diffs catch repeated edits to an already-dirty tracked file; hashing
+/// untracked file content catches the equivalent case without treating mtime as
+/// a change (many tools only touch their own output files).
+fn snapshot(dir: &Path) -> Option<WorktreeSnapshot> {
+    let commit = git(dir, &["rev-parse", "--short", "HEAD"])?;
+    let porcelain = git(dir, &["status", "--porcelain"])?;
+    let unstaged_diff = git(dir, &["diff", "--no-ext-diff"])?;
+    let staged_diff = git(dir, &["diff", "--cached", "--no-ext-diff"])?;
+    Some(WorktreeSnapshot {
+        commit,
+        changed_files: porcelain.lines().count(),
+        porcelain,
+        unstaged_diff,
+        staged_diff,
+        untracked_content: untracked_content_hash(dir),
+    })
+}
+
+fn untracked_content_hash(dir: &Path) -> u64 {
+    let Some(paths) = git(dir, &["ls-files", "--others", "--exclude-standard", "-z"]) else {
+        return 0;
+    };
+    let mut hasher = DefaultHasher::new();
+    for relative in paths.split('\0').filter(|path| !path.is_empty()) {
+        relative.hash(&mut hasher);
+        match fs::read(dir.join(relative)) {
+            Ok(contents) => contents.hash(&mut hasher),
+            Err(error) => error.kind().hash(&mut hasher),
+        }
+    }
+    hasher.finish()
 }
 fn now() -> u64 {
     SystemTime::now()
@@ -333,71 +468,28 @@ fn now() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
-fn signatures(configs: &[WorktreeConfig]) -> Vec<String> {
+fn signatures(configs: &[WorktreeConfig]) -> Vec<Option<WorktreeSnapshot>> {
     configs
         .iter()
-        .map(|w| {
-            format!(
-                "{}:{}:{}",
-                git(&w.path, &["rev-parse", "HEAD"]).unwrap_or_default(),
-                git(&w.path, &["status", "--porcelain"]).unwrap_or_default(),
-                tree_stamp(&w.path)
-            )
-        })
+        .map(|worktree| snapshot(&worktree.path))
         .collect()
-}
-
-/// A cheap polling stamp catches repeated edits to an already-modified file.
-/// Git porcelain alone would not change for the second edit.
-fn tree_stamp(path: &Path) -> u128 {
-    let mut stamp = 0_u128;
-    let Ok(entries) = fs::read_dir(path) else {
-        return stamp;
-    };
-    for entry in entries.flatten() {
-        let file_name = entry.file_name();
-        let name = file_name.to_string_lossy();
-        if matches!(name.as_ref(), ".git" | "target" | "node_modules") {
-            continue;
-        }
-        if entry
-            .file_type()
-            .map(|kind| kind.is_symlink())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        if let Ok(meta) = entry.metadata() {
-            stamp = stamp.wrapping_add(meta.len() as u128);
-            if let Ok(modified) = meta.modified() {
-                stamp = stamp.wrapping_add(
-                    modified
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_nanos(),
-                );
-            }
-            if meta.is_dir() {
-                stamp = stamp.wrapping_add(tree_stamp(&entry.path()));
-            }
-        }
-    }
-    stamp
 }
 
 fn print_rows(rows: &[BoardRow]) {
     for row in rows {
         println!(
-            "{:<16} {:<5} {}  {} changed  {}",
+            "{:<16} {:<5} {}  {} changed  last pass: {}  {}",
             row.name,
             match row.status {
                 Status::Pass => "PASS",
                 Status::Fail => "FAIL",
                 Status::Idle => "IDLE",
                 Status::Error => "ERROR",
+                Status::Stale => "STALE",
             },
             row.commit,
             row.changed_files,
+            row.last_pass_commit.as_deref().unwrap_or("none"),
             row.detail
         );
     }
@@ -430,17 +522,16 @@ impl RateLimiter {
     }
 }
 
-fn serve(address: String, rows: Arc<Mutex<Vec<BoardRow>>>) {
-    let listener = match TcpListener::bind(&address) {
-        Ok(x) => x,
-        Err(e) => {
-            eprintln!("Status board could not bind {address}: {e}");
-            return;
-        }
-    };
+fn serve(listener: TcpListener, rows: Arc<Mutex<Vec<BoardRow>>>) {
     let limiter = Arc::new(Mutex::new(RateLimiter::default()));
     for stream in listener.incoming().flatten() {
-        let _ = answer(stream, &rows, &limiter);
+        let board = rows.clone();
+        let request_limiter = limiter.clone();
+        // A slow local client must not prevent another browser or script from
+        // reading the board. Each connection is bounded by the read timeout.
+        thread::spawn(move || {
+            let _ = answer(stream, &board, &request_limiter);
+        });
     }
 }
 fn answer(
@@ -448,10 +539,16 @@ fn answer(
     rows: &Arc<Mutex<Vec<BoardRow>>>,
     limiter: &Arc<Mutex<RateLimiter>>,
 ) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(1)))?;
     let mut request = [0_u8; 1024];
     let _ = stream.read(&mut request)?;
     if !limiter.lock().unwrap().allow() {
-        return write!(stream, "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nCache-Control: no-store\r\nContent-Length: 0\r\n\r\n");
+        return write!(
+            stream,
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\n{}Content-Length: 0\r\n\r\n",
+            board_headers()
+        );
     }
     let first = String::from_utf8_lossy(&request);
     let json = first.starts_with("GET /status.json ");
@@ -465,11 +562,20 @@ fn answer(
     } else {
         "text/html; charset=utf-8"
     };
-    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: {content}\r\nCache-Control: no-store\r\nContent-Length: {}\r\n\r\n{}", body.len(), body)
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: {content}\r\n{}Content-Length: {}\r\n\r\n{}",
+        board_headers(),
+        body.len(),
+        body
+    )
+}
+fn board_headers() -> &'static str {
+    "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: strict-origin-when-cross-origin\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n"
 }
 fn board_html(rows: &[BoardRow]) -> String {
-    let cards: String = rows.iter().map(|r| format!("<li><b>{}</b><span class=\"{}\">{}</span><small>{} · {} changed files</small><p>{}</p></li>", esc(&r.name), match r.status { Status::Pass => "pass", Status::Fail => "fail", Status::Idle => "idle", Status::Error => "error" }, match r.status { Status::Pass => "PASS", Status::Fail => "FAIL", Status::Idle => "IDLE", Status::Error => "ERROR" }, esc(&r.commit), r.changed_files, esc(&r.detail))).collect();
-    format!("<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>Worktree Verifier status</title><style>body{{background:#f5eedb;color:#17202b;font:16px system-ui;margin:0;padding:2rem}}main{{max-width:50rem;margin:auto}}li{{border-top:2px solid #b8ad94;padding:1rem 0;list-style:none}}span{{float:right;font-weight:700}}.pass{{color:#25674e}}.fail,.error{{color:#b84531}}.idle{{color:#a36313}}small{{display:block;color:#48515a;margin-top:.4rem}}p{{margin:.5rem 0 0}}</style><main><h1>Worktree status</h1><p>Only this computer can reach this board.</p><ul>{cards}</ul></main></html>")
+    let cards: String = rows.iter().map(|r| format!("<li><b>{}</b><span class=\"{}\">{}</span><small>Current: {} · Last pass: {} · {} changed files</small><p>{}</p></li>", esc(&r.name), match r.status { Status::Pass => "pass", Status::Fail => "fail", Status::Idle => "idle", Status::Error => "error", Status::Stale => "stale" }, match r.status { Status::Pass => "PASS", Status::Fail => "FAIL", Status::Idle => "IDLE", Status::Error => "ERROR", Status::Stale => "STALE" }, esc(&r.commit), esc(r.last_pass_commit.as_deref().unwrap_or("none")), r.changed_files, esc(&r.detail))).collect();
+    format!("<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>Worktree Verifier status</title><style>body{{background:#f5eedb;color:#17202b;font:16px system-ui;margin:0;padding:2rem}}main{{max-width:50rem;margin:auto}}li{{border-top:2px solid #b8ad94;padding:1rem 0;list-style:none}}span{{float:right;font-weight:700}}.pass{{color:#25674e}}.fail,.error{{color:#b84531}}.idle,.stale{{color:#a36313}}small{{display:block;color:#48515a;margin-top:.4rem}}p{{margin:.5rem 0 0}}</style><main><h1>Worktree status</h1><p>Only this computer can reach this board.</p><ul>{cards}</ul></main></html>")
 }
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -568,22 +674,23 @@ mod tests {
     use super::*;
     #[test]
     fn missing_path_reports_a_next_step() {
-        let row = check_worktree(&WorktreeConfig {
-            name: "gone".into(),
-            path: PathBuf::from("/definitely/not/here"),
-            checks: vec!["true".into()],
-        });
+        let row = check_worktree(
+            &WorktreeConfig {
+                name: "gone".into(),
+                path: PathBuf::from("/definitely/not/here"),
+                checks: vec!["true".into()],
+            },
+            None,
+        );
         assert!(matches!(row.status, Status::Error));
         assert!(row.detail.contains("Check path"));
     }
     #[test]
-    // @claim:loopback-default
-    fn claim_loopback_is_default() {
+    fn loopback_is_default() {
         assert_eq!(ServerConfig::default().address, "127.0.0.1:4318");
     }
     #[test]
-    // @claim:configured-commands
-    fn claim_configured_command_runs_in_its_worktree() {
+    fn configured_command_runs_in_its_worktree() {
         let root = unique_temp_dir("wtv-command");
         fs::create_dir_all(&root).unwrap();
         run_git(&root, &["init"]).unwrap();
@@ -598,24 +705,36 @@ mod tests {
         run_git(&root, &["commit", "-m", "Seed test worktree"]).unwrap();
         let marker = root.join("ran-here");
         let command = format!("printf yes > {}", marker.display());
-        let row = check_worktree(&WorktreeConfig {
-            name: "sample".into(),
-            path: root.clone(),
-            checks: vec![command],
-        });
+        let row = check_until_stable(
+            &WorktreeConfig {
+                name: "sample".into(),
+                path: root.clone(),
+                checks: vec![command],
+            },
+            None,
+        );
         assert!(matches!(row.status, Status::Pass));
         assert_eq!(fs::read_to_string(marker).unwrap(), "yes");
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn repeated_edit_changes_the_polling_stamp() {
+    fn repeated_edit_changes_the_worktree_snapshot() {
         let root = unique_temp_dir("wtv-stamp");
         fs::create_dir_all(&root).unwrap();
+        run_git(&root, &["init"]).unwrap();
+        run_git(
+            &root,
+            &["config", "user.email", "test@worktree-verifier.local"],
+        )
+        .unwrap();
+        run_git(&root, &["config", "user.name", "Worktree Verifier test"]).unwrap();
         let file = root.join("source.txt");
         fs::write(&file, "one").unwrap();
-        let first = tree_stamp(&root);
+        run_git(&root, &["add", "source.txt"]).unwrap();
+        run_git(&root, &["commit", "-m", "Seed snapshot test"]).unwrap();
+        let first = snapshot(&root).unwrap();
         fs::write(&file, "two changes").unwrap();
-        assert_ne!(first, tree_stamp(&root));
+        assert_ne!(first, snapshot(&root).unwrap());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -623,11 +742,14 @@ mod tests {
         let root = unique_temp_dir("wtv-non-git");
         fs::create_dir_all(&root).unwrap();
         let marker = root.join("must-not-exist");
-        let row = check_worktree(&WorktreeConfig {
-            name: "not-a-worktree".into(),
-            path: root.clone(),
-            checks: vec![format!("touch {}", marker.display())],
-        });
+        let row = check_worktree(
+            &WorktreeConfig {
+                name: "not-a-worktree".into(),
+                path: root.clone(),
+                checks: vec![format!("touch {}", marker.display())],
+            },
+            None,
+        );
         assert!(matches!(row.status, Status::Error));
         assert!(row.detail.contains("not a Git worktree"));
         assert!(!marker.exists());
@@ -660,5 +782,7 @@ mod tests {
         worker.join().unwrap();
         assert!(last.starts_with("HTTP/1.1 429"));
         assert!(last.contains("Retry-After: 1"));
+        assert!(last.contains("X-Content-Type-Options: nosniff"));
+        assert!(last.contains("Referrer-Policy: strict-origin-when-cross-origin"));
     }
 }

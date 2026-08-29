@@ -1,8 +1,8 @@
 # Landing copy audit
 
-Audited route: `/` in `site/src/main.js`. Headings and labels are included so
-the reading order can be checked. No sentence exceeds 22 words. No banned word
-appears.
+Audited route: `/` in `site/src/main.js`. Headings, labels, and instructions
+are included so the reading order can be checked. No sentence exceeds 22 words
+and no banned word appears.
 
 | Copy | Words | Result |
 | --- | ---: | --- |
@@ -12,14 +12,13 @@ appears.
 | Sample uses isolated Git worktrees. | 5 | pass |
 | Commands are opt-in. | 3 | pass |
 | Board defaults to localhost. | 4 | pass |
-| Separate changes. | 2 | pass |
-| One fresh status board. | 4 | pass |
+| Separate changes. One fresh status board. | 5 | pass |
 | See every worktree at a glance | 7 | pass |
-| Commit hashes and changed-file counts make freshness explicit. | 7 | pass |
+| The board keeps the last passing commit when a newer check fails. | 12 | pass |
 | Run smoke checks where the changes live | 8 | pass |
 | Give each Git path and each fast command in one file. | 12 | pass |
-| The CLI checks each worktree after its files change. | 10 | pass |
-| Open localhost to see passes, failures, commits, and changed files. | 10 | pass |
+| It reruns checks only for worktrees that changed. | 8 | pass |
+| Each result names the snapshot it checked and its last pass. | 12 | pass |
 | Your checks stay local and intentional | 6 | pass |
 | The CLI runs only commands you put in its config. | 10 | pass |
 | The status board binds to localhost by default. | 8 | pass |
@@ -32,4 +31,4 @@ appears.
 | Fast user-declared command | smoke check |
 | Local web summary | status board |
 | A configured command list | config |
-| Files that differ from the commit | changed files |
+| Snapshot that passed | last pass |
