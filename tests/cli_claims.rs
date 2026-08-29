@@ -139,6 +139,85 @@ fn start_watcher(config: &Path) -> Child {
         .expect("start watcher")
 }
 
+/// Run the public watcher with a Git shim that pauses its third status scan.
+/// For a stable initial check, that scan is the startup baseline captured after
+/// the check. The shim gives this integration test a deterministic version of
+/// the old publish-before-baseline race without adding a production test hook.
+fn start_watcher_with_blocked_startup_baseline(
+    config: &Path,
+    shim_dir: &Path,
+    counter: &Path,
+    blocked: &Path,
+    release: &Path,
+) -> Child {
+    let real_git = Command::new("sh")
+        .args(["-lc", "command -v git"])
+        .output()
+        .expect("locate system git");
+    assert!(
+        real_git.status.success(),
+        "system git is required for this test"
+    );
+    let real_git = String::from_utf8(real_git.stdout)
+        .expect("system git path")
+        .trim()
+        .to_owned();
+    let shim = shim_dir.join("git");
+    fs::create_dir_all(shim_dir).expect("create Git shim directory");
+    fs::write(
+        &shim,
+        r#"#!/bin/sh
+if [ "$1" = "status" ] && [ "$2" = "--porcelain" ]; then
+  count=0
+  if [ -f "$WTV_GIT_STATUS_COUNT" ]; then count=$(cat "$WTV_GIT_STATUS_COUNT"); fi
+  count=$((count + 1))
+  printf '%s' "$count" > "$WTV_GIT_STATUS_COUNT"
+  if [ "$count" -eq 3 ]; then
+    : > "$WTV_BASELINE_BLOCKED"
+    ticks=0
+    while [ ! -f "$WTV_BASELINE_RELEASE" ] && [ "$ticks" -lt 1000 ]; do
+      sleep 0.01
+      ticks=$((ticks + 1))
+    done
+  fi
+fi
+exec "$WTV_REAL_GIT" "$@"
+"#,
+    )
+    .expect("write Git shim");
+    let chmod = Command::new("chmod")
+        .args(["+x", shim.to_str().expect("UTF-8 shim path")])
+        .output()
+        .expect("make Git shim executable");
+    assert!(chmod.status.success(), "make Git shim executable");
+
+    let mut paths = vec![shim_dir.to_path_buf()];
+    if let Some(current_path) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&current_path));
+    }
+    let path = std::env::join_paths(paths).expect("build watcher PATH");
+    cli()
+        .args(["run", "--config"])
+        .arg(config)
+        .env("PATH", path)
+        .env("WTV_REAL_GIT", real_git)
+        .env("WTV_GIT_STATUS_COUNT", counter)
+        .env("WTV_BASELINE_BLOCKED", blocked)
+        .env("WTV_BASELINE_RELEASE", release)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start watcher with blocked startup baseline")
+}
+
+fn wait_for_file(path: &Path, message: &str) {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while !path.exists() {
+        assert!(Instant::now() < deadline, "{message}");
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn stop_watcher(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
@@ -266,7 +345,10 @@ fn claim_watcher_keeps_the_last_pass_and_never_promotes_an_unchecked_commit() {
     fs::create_dir_all(&repo).expect("create repo");
     init_repo(
         &repo,
-        &[("verdict.txt", "old\n"), (".gitignore", "started\ngo\n")],
+        &[
+            ("verdict.txt", "old\n"),
+            (".gitignore", "started\ngo\ntested.txt\n"),
+        ],
     );
     fs::write(repo.join("go"), "initial\n").expect("prepare initial smoke check");
     let old_commit = short_commit(&repo);
@@ -281,7 +363,24 @@ fn claim_watcher_keeps_the_last_pass_and_never_promotes_an_unchecked_commit() {
             &["date +%s%N > started; cat verdict.txt > tested.txt; while [ ! -f go ]; do sleep 0.05; done; grep -qx old tested.txt"],
         )],
     );
-    let mut watcher = start_watcher(&config);
+    let baseline_blocked = root.join("baseline-blocked");
+    let baseline_release = root.join("baseline-release");
+    let mut watcher = start_watcher_with_blocked_startup_baseline(
+        &config,
+        &root.join("git-shim"),
+        &root.join("git-status-count"),
+        &baseline_blocked,
+        &baseline_release,
+    );
+    wait_for_file(
+        &baseline_blocked,
+        "watcher did not reach its startup baseline scan",
+    );
+    assert!(
+        TcpStream::connect(&address).is_err(),
+        "status board became visible before its startup baseline completed"
+    );
+    fs::write(&baseline_release, "continue\n").expect("release startup baseline");
     let initial = wait_for_status(&address, |rows| {
         rows[0]["status"] == "pass" && rows[0]["last_pass_commit"] == old_commit
     });

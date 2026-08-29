@@ -174,7 +174,13 @@ fn load(path: &Path) -> Result<Config> {
 fn run_from_config(path: &Path, once: bool, json: bool) -> Result<()> {
     let cfg = load(path)?;
     let rows = Arc::new(Mutex::new(Vec::new()));
-    check_all(&cfg.worktrees, &rows);
+    // A board result is a promise about the state the watcher is now tracking.
+    // Capture that baseline before publishing the initial rows: otherwise a
+    // client can react to the visible PASS, edit a worktree, and have that edit
+    // silently accepted as the baseline rather than scheduled for a check.
+    let initial = checked_all(&cfg.worktrees, &[]);
+    let mut previous = signatures(&cfg.worktrees);
+    *rows.lock().unwrap() = initial;
     if json {
         println!("{}", serde_json::to_string_pretty(&*rows.lock().unwrap())?);
         if has_failed(&rows.lock().unwrap()) {
@@ -202,7 +208,6 @@ fn run_from_config(path: &Path, once: bool, json: bool) -> Result<()> {
         cfg.server.poll_seconds.max(1),
         cfg.server.address
     );
-    let mut previous = signatures(&cfg.worktrees);
     loop {
         thread::sleep(Duration::from_secs(cfg.server.poll_seconds.max(1)));
         let next = signatures(&cfg.worktrees);
@@ -213,11 +218,14 @@ fn run_from_config(path: &Path, once: bool, json: bool) -> Result<()> {
             .filter_map(|(index, (current, prior))| (current != prior).then_some(index))
             .collect();
         if !changed.is_empty() {
-            check_selected(&cfg.worktrees, &rows, &changed);
-            print_rows(&rows.lock().unwrap());
-            // A smoke check may create its own build output. Record the state after
-            // that check so it does not cause an unrelated follow-up run.
+            let prior = rows.lock().unwrap().clone();
+            let updated = checked_selected(&cfg.worktrees, &prior, &changed);
+            // Do not expose a rerun result until its post-check state has become
+            // the watcher baseline. This preserves the same no-missed-edit
+            // guarantee as startup while still ignoring a check's own output.
             previous = signatures(&cfg.worktrees);
+            *rows.lock().unwrap() = updated;
+            print_rows(&rows.lock().unwrap());
         }
     }
 }
@@ -227,18 +235,20 @@ fn has_failed(rows: &[BoardRow]) -> bool {
         .any(|row| matches!(row.status, Status::Fail | Status::Error | Status::Stale))
 }
 
-fn check_all(configs: &[WorktreeConfig], rows: &Arc<Mutex<Vec<BoardRow>>>) {
+fn checked_all(configs: &[WorktreeConfig], prior: &[BoardRow]) -> Vec<BoardRow> {
     // Checks intentionally run serially: many test tools write shared caches.
-    let prior = rows.lock().unwrap().clone();
-    let next: Vec<BoardRow> = configs
+    configs
         .iter()
-        .map(|spec| check_until_stable(spec, matching_row(&prior, spec)))
-        .collect();
-    *rows.lock().unwrap() = next;
+        .map(|spec| check_until_stable(spec, matching_row(prior, spec)))
+        .collect()
 }
 
-fn check_selected(configs: &[WorktreeConfig], rows: &Arc<Mutex<Vec<BoardRow>>>, indexes: &[usize]) {
-    let mut updated = rows.lock().unwrap().clone();
+fn checked_selected(
+    configs: &[WorktreeConfig],
+    prior: &[BoardRow],
+    indexes: &[usize],
+) -> Vec<BoardRow> {
+    let mut updated = prior.to_vec();
     for &index in indexes {
         let spec = &configs[index];
         let prior = matching_row(&updated, spec).cloned();
@@ -249,7 +259,7 @@ fn check_selected(configs: &[WorktreeConfig], rows: &Arc<Mutex<Vec<BoardRow>>>, 
             updated.push(row);
         }
     }
-    *rows.lock().unwrap() = updated;
+    updated
 }
 
 fn matching_row<'a>(rows: &'a [BoardRow], spec: &WorktreeConfig) -> Option<&'a BoardRow> {
