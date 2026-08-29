@@ -115,8 +115,10 @@ npm run dev
 
 ## Privacy and boundaries
 
-The CLI binds its board to loopback by default. A command you configure may make
-network requests; review each command before adding it.
+The CLI binds its board to loopback by default. The status page confirms a
+loopback-only listener and warns when your configured address may accept network
+connections. A command you configure may make network requests; review each
+command before adding it.
 
 The documentation site is static and sends no analytics or tracking requests.
 Its `/privacy` and `/terms` routes are included in the built site.

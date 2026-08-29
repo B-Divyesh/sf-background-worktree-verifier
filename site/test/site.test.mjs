@@ -111,6 +111,14 @@ test('browser desktop and 390px mobile have no serious axe findings, route focus
           }));
           assert.ok(boxes.every(box => box.width >= 44 && box.height >= 44), `${selector} has a sub-44px target: ${JSON.stringify(boxes)}`);
         }
+        const navBoxes = await page.locator('.site-header nav a').evaluateAll(nodes => nodes.map(node => {
+          const box = node.getBoundingClientRect();
+          return { label: node.textContent, left: box.left, right: box.right };
+        }));
+        for (let index = 1; index < navBoxes.length; index += 1) {
+          const gap = navBoxes[index].left - navBoxes[index - 1].right;
+          assert.ok(gap >= 8, `${navBoxes[index - 1].label} and ${navBoxes[index].label} are only ${gap}px apart`);
+        }
       }
       await page.goBack({ waitUntil: 'networkidle' });
       assert.equal(await page.evaluate(() => document.activeElement?.tagName), 'H1');

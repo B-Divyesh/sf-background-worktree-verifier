@@ -14,6 +14,13 @@
     "sandbox": "fresh integration-test process invokes the public init command and inspects its generated default server address"
   },
   {
+    "id": "listener-reachability-guidance",
+    "claim": "The live status page identifies loopback-only listeners and warns when a configured listener may accept network connections.",
+    "where": "CLI status page, README",
+    "test": "cargo test --test cli_claims claim_status_page_describes_the_configured_listener",
+    "sandbox": "fresh public watcher serves the real board first on a loopback address and then on 0.0.0.0; assert the page describes each listener accurately"
+  },
+  {
     "id": "configured-commands",
     "claim": "The CLI runs only commands you put in its config.",
     "where": "landing boundaries, README",

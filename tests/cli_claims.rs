@@ -99,14 +99,36 @@ fn write_config(path: &Path, address: &str, worktrees: &[(&str, &Path, &[&str])]
     fs::write(path, body).expect("write config");
 }
 
-fn get_response(address: &str) -> std::io::Result<String> {
+fn get_path_response(address: &str, path: &str) -> std::io::Result<String> {
     let mut stream = TcpStream::connect(address)?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-    stream
-        .write_all(b"GET /status.json HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+    )?;
     let mut response = String::new();
     stream.read_to_string(&mut response)?;
     Ok(response)
+}
+
+fn get_response(address: &str) -> std::io::Result<String> {
+    get_path_response(address, "/status.json")
+}
+
+fn wait_for_board_html(address: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Ok(response) = get_path_response(address, "/") {
+            if response.starts_with("HTTP/1.1 200 OK") {
+                return response;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "status board did not become available"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn wait_for_status(address: &str, predicate: impl Fn(&Value) -> bool) -> Value {
@@ -296,6 +318,49 @@ fn claim_loopback_is_the_public_cli_default() {
     let config_text = fs::read_to_string(&config).expect("read generated config");
     assert!(config_text.contains("address = \"127.0.0.1:4318\""));
     fs::remove_dir_all(root).expect("remove claim fixture");
+}
+
+#[test]
+// @claim:listener-reachability-guidance
+fn claim_status_page_describes_the_configured_listener() {
+    let root = temp_dir("wtv-listener-guidance-claim");
+    let repo = root.join("checkout");
+    fs::create_dir_all(&repo).expect("create repo");
+    init_repo(&repo, &[("source.txt", "listener guidance\n")]);
+
+    let loopback_address = free_address();
+    let loopback_config = root.join("loopback.toml");
+    write_config(
+        &loopback_config,
+        &loopback_address,
+        &[("checkout", &repo, &[])],
+    );
+    let mut loopback_watcher = start_watcher(&loopback_config);
+    let loopback_page = wait_for_board_html(&loopback_address);
+    assert!(loopback_page.contains("This board listens only on this computer."));
+    assert!(!loopback_page.contains("may be reachable from your network"));
+    stop_watcher(&mut loopback_watcher);
+
+    let reserved = TcpListener::bind("127.0.0.1:0").expect("reserve wildcard port");
+    let port = reserved.local_addr().expect("reserved address").port();
+    drop(reserved);
+    let wildcard_address = format!("0.0.0.0:{port}");
+    let wildcard_connect_address = format!("127.0.0.1:{port}");
+    let wildcard_config = root.join("wildcard.toml");
+    write_config(
+        &wildcard_config,
+        &wildcard_address,
+        &[("checkout", &repo, &[])],
+    );
+    let mut wildcard_watcher = start_watcher(&wildcard_config);
+    let wildcard_page = wait_for_board_html(&wildcard_connect_address);
+    assert!(wildcard_page.contains("This board may be reachable from your network."));
+    assert!(wildcard_page.contains("[server].address"));
+    assert!(wildcard_page.contains("127.0.0.1"));
+    assert!(!wildcard_page.contains("Only this computer can reach this board."));
+    stop_watcher(&mut wildcard_watcher);
+
+    fs::remove_dir_all(root).expect("remove listener guidance fixture");
 }
 
 #[test]

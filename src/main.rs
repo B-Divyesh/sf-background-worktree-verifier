@@ -201,8 +201,12 @@ fn run_from_config(path: &Path, once: bool, json: bool) -> Result<()> {
             cfg.server.address
         )
     })?;
+    let loopback_only = listener
+        .local_addr()
+        .map(|address| address.ip().is_loopback())
+        .unwrap_or(false);
     let board = rows.clone();
-    thread::spawn(move || serve(listener, board));
+    thread::spawn(move || serve(listener, board, loopback_only));
     println!(
         "Watching every {}s. Board: http://{}",
         cfg.server.poll_seconds.max(1),
@@ -532,7 +536,7 @@ impl RateLimiter {
     }
 }
 
-fn serve(listener: TcpListener, rows: Arc<Mutex<Vec<BoardRow>>>) {
+fn serve(listener: TcpListener, rows: Arc<Mutex<Vec<BoardRow>>>, loopback_only: bool) {
     let limiter = Arc::new(Mutex::new(RateLimiter::default()));
     for stream in listener.incoming().flatten() {
         let board = rows.clone();
@@ -540,7 +544,7 @@ fn serve(listener: TcpListener, rows: Arc<Mutex<Vec<BoardRow>>>) {
         // A slow local client must not prevent another browser or script from
         // reading the board. Each connection is bounded by the read timeout.
         thread::spawn(move || {
-            let _ = answer(stream, &board, &request_limiter);
+            let _ = answer(stream, &board, &request_limiter, loopback_only);
         });
     }
 }
@@ -548,6 +552,7 @@ fn answer(
     mut stream: TcpStream,
     rows: &Arc<Mutex<Vec<BoardRow>>>,
     limiter: &Arc<Mutex<RateLimiter>>,
+    loopback_only: bool,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(1)))?;
     stream.set_write_timeout(Some(Duration::from_secs(1)))?;
@@ -565,7 +570,7 @@ fn answer(
     let body = if json {
         serde_json::to_string(&*rows.lock().unwrap()).unwrap_or_else(|_| "[]".into())
     } else {
-        board_html(&rows.lock().unwrap())
+        board_html(&rows.lock().unwrap(), loopback_only)
     };
     let content = if json {
         "application/json"
@@ -583,9 +588,14 @@ fn answer(
 fn board_headers() -> &'static str {
     "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: strict-origin-when-cross-origin\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n"
 }
-fn board_html(rows: &[BoardRow]) -> String {
+fn board_html(rows: &[BoardRow], loopback_only: bool) -> String {
     let cards: String = rows.iter().map(|r| format!("<li><b>{}</b><span class=\"{}\">{}</span><small>Current: {} · Last pass: {} · {} changed files</small><p>{}</p></li>", esc(&r.name), match r.status { Status::Pass => "pass", Status::Fail => "fail", Status::Idle => "idle", Status::Error => "error", Status::Stale => "stale" }, match r.status { Status::Pass => "PASS", Status::Fail => "FAIL", Status::Idle => "IDLE", Status::Error => "ERROR", Status::Stale => "STALE" }, esc(&r.commit), esc(r.last_pass_commit.as_deref().unwrap_or("none")), r.changed_files, esc(&r.detail))).collect();
-    format!("<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>Worktree Verifier status</title><style>body{{background:#f5eedb;color:#17202b;font:16px system-ui;margin:0;padding:2rem}}main{{max-width:50rem;margin:auto}}li{{border-top:2px solid #b8ad94;padding:1rem 0;list-style:none}}span{{float:right;font-weight:700}}.pass{{color:#25674e}}.fail,.error{{color:#b84531}}.idle,.stale{{color:#a36313}}small{{display:block;color:#48515a;margin-top:.4rem}}p{{margin:.5rem 0 0}}</style><main><h1>Worktree status</h1><p>Only this computer can reach this board.</p><ul>{cards}</ul></main></html>")
+    let reachability = if loopback_only {
+        "This board listens only on this computer."
+    } else {
+        "This board may be reachable from your network. Set <code>[server].address</code> to <code>127.0.0.1</code> to keep it on this computer."
+    };
+    format!("<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>Worktree Verifier status</title><style>body{{background:#f5eedb;color:#17202b;font:16px system-ui;margin:0;padding:2rem}}main{{max-width:50rem;margin:auto}}li{{border-top:2px solid #b8ad94;padding:1rem 0;list-style:none}}span{{float:right;font-weight:700}}.pass{{color:#25674e}}.fail,.error{{color:#b84531}}.idle,.stale{{color:#a36313}}small{{display:block;color:#48515a;margin-top:.4rem}}p{{margin:.5rem 0 0}}</style><main><h1>Worktree status</h1><p>{reachability}</p><ul>{cards}</ul></main></html>")
 }
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -776,7 +786,7 @@ mod tests {
         let worker = thread::spawn(move || {
             for _ in 0..=STATUS_REQUESTS_PER_SECOND {
                 let (stream, _) = listener.accept().unwrap();
-                answer(stream, &server_rows, &server_limiter).unwrap();
+                answer(stream, &server_rows, &server_limiter, true).unwrap();
             }
         });
         let mut last = String::new();
