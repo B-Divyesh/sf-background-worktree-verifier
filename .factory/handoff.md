@@ -1,10 +1,10 @@
 # Repair handoff — verifier 5 blockers resolved
 
-**Work order:** `background-worktree-verifier-repair-5`  
-**Failed candidate:** `42001ae8e48777d13a035472dcf40cdf79f1cdf4`  
+**Work order:** `background-worktree-verifier-repair-5`
+**Failed candidate:** `42001ae8e48777d13a035472dcf40cdf79f1cdf4`
 **Verifier report:** `c53ab3e6831e10f84453ec7e4b1c5b5b17b25efe`
-(`.factory/verification-5.md`)  
-**Repair commit:** `35a7a1a9ba8d7784f922dc429a2a72ce823c78ce`  
+(`.factory/verification-5.md`)
+**Repair commit:** `35a7a1a9ba8d7784f922dc429a2a72ce823c78ce`
 **Product:** Rust CLI with a static Vite documentation site
 
 ## What changed
