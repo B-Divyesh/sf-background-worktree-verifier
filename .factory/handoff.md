@@ -1,4 +1,4 @@
-# Repair 6 handoff — local verification passed
+# Repair 6 handoff — PASS
 
 **Work order:** `background-worktree-verifier-repair-6`
 **Failed candidate:** `87858d7f2e16df289fea606e49126fe3b201ab89`
@@ -85,10 +85,39 @@ KiB compressed (54,460 bytes). The packaged source was installed with
 `run --once --json`. The exact requested `cargo run -- demo` also produced
 three distinct passing commits and removed its sample directory.
 
-## Deployment and known gaps
+## Deployment and live identity
 
-Deployment and live-identity evidence will be appended after the static
-artifact is pushed and deployed. No local release-blocking gaps remain.
+The repair code and local-evidence commits were pushed to `origin/main`. The
+existing Standard Azure Static Web App `sf-background-worktree-verifier` in
+Central US was deployed with the factory static deployment configuration:
+
+```sh
+/opt/fleet/lib/deploy-static.sh background-worktree-verifier dist/site
+```
+
+Azure reported deployment ID `ac372b73-d7f1-49cf-917b-68ab7b2ebbb0`, status
+`Succeeded`, custom-domain status `Ready`, and HTTPS 200 at
+`https://background-worktree-verifier.sociobot.in`.
+
+All 12 public files match `dist/site` byte for byte. The live home, demo,
+privacy, terms, and 404 documents passed axe at 1440×900 and 390×844 with zero
+serious/critical findings, no console or page errors, no overflow, no
+third-party requests, and no browser storage or service worker. Keyboard skip,
+44px mobile targets, and reduced-motion behavior passed. The factory URL
+verifier also passed.
+
+The custom domain returns HTTP 404 for an unknown route and redirects HTTP to
+HTTPS. Live responses include HSTS, the self-only CSP with header-delivered
+`frame-ancestors 'none'`, nosniff, and strict referrer policy. HTML revalidates
+after 30 seconds; hashed assets use one-year immutable caching; an ETag request
+returned 304.
+
+Live mobile Lighthouse scored 100 performance, 100 accessibility, 100 best
+practices, and 100 SEO. FCP was 0.82s, LCP 1.07s, TBT 0ms, and CLS 0.
+
+No release-blocking product, test, package, accessibility, privacy,
+performance, deployment, or live-identity gaps remain. Registry publication is
+factory-owned and was intentionally not performed.
 
 ---
 
