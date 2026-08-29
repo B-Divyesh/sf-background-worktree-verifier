@@ -1,117 +1,60 @@
-# Repair handoff — watcher baseline race fixed
+# Verification handoff — FAIL
 
-**Repair commit:** `652820815444263aae3a7528b771fce4a5229b41`
-**Base verifier report:** `.factory/verification-4.md` at
-`e0e454763b05fb4190493fb3077a4e65d769aadb`
-**Product:** local Rust CLI with a static Vite documentation site
+**Candidate:** `42001ae8e48777d13a035472dcf40cdf79f1cdf4`
 
-## What changed
+**Live URL:** https://background-worktree-verifier.sociobot.in
 
-The watcher now captures its post-check Git signatures before it publishes an
-initial or rerun result to the local board. An edit made after a visible PASS
-therefore remains different from the recorded baseline and is selected for a
-smoke check; it cannot be silently accepted as already seen.
+**Date:** 2026-08-29
 
-The row-building functions now return unpublished rows. The watcher advances
-its baseline, then swaps those rows into the board. This same ordering applies
-to both startup and selected reruns.
+**Full report:** `.factory/verification-5.md`
 
-`claim_watcher_keeps_the_last_pass_and_never_promotes_an_unchecked_commit`
-now contains a deterministic public-CLI regression for the reported window. A
-test-only Git shim pauses the third `git status --porcelain` call, which is the
-startup post-check baseline for a stable worktree. While it is paused the test
-asserts that the loopback status board is unreachable. It then releases the
-baseline, verifies the initial PASS, and retains the existing public watcher
-test that changes a commit during a smoke check, observes the newer FAIL, and
-retains the old `last_pass_commit`.
+## Result
 
-No researched brief, site behavior, browser storage behavior, static asset, or
-deployment class was changed.
+**FAIL.** The previous watcher race is fixed and stable, all seven registered
+claim tests pass after the clean dependency install, all local quality gates
+pass, the packaged CLI works in a fresh consumer, and every public live asset
+matches the candidate build.
 
-## Exact verification evidence
+The release blocker is a false and unregistered privacy statement in the real
+CLI status page. It always says “Only this computer can reach this board.” A
+black-box run bound to `0.0.0.0:4320` was reachable through the container's
+non-loopback address and still showed that statement. The claim registry tests
+only the accurate, narrower promise that loopback is the default. Under the
+claims contract, the unlisted claim fails verification.
 
-Started from a clean dependency/build state:
+There is also a low-severity mobile spacing defect: the live header's adjacent
+Demo, Setup, and Privacy targets are 4px apart at 390px, below the required
+8px, although each target is at least 44px and axe reports no serious/critical
+issues.
 
-```sh
-cargo clean
-npm ci
-npm test
-```
+## Verification summary
 
-PASS: 6 Rust unit tests, 6 public CLI integration tests, production Vite build,
-and 6 browser tests. The browser suite uses Playwright 1.58.2 and
-`@axe-core/playwright` 4.11.0 at 1440×900 and 390×844. It verifies keyboard
-skip-link and route focus behavior, 44px phone targets, no serious/critical
-axe violations, no horizontal overflow, no console/page errors, and reduced
-motion.
+- First-read/demo gate: PASS.
+- Registered claims: 7/7 PASS after `npm ci`; each has exactly one tag.
+- Previous race regression: PASS in five consecutive exact runs.
+- `npm test`: PASS (6 unit, 6 integration, 6 site/browser tests).
+- `npm run build`: PASS; emits `dist/site`.
+- rustfmt and Clippy with warnings denied: PASS.
+- `cargo package --allow-dirty`: PASS, 44.2 KiB compressed.
+- Fresh packaged install and CLI happy/error/recovery paths: PASS.
+- Status API allowance: 60 requests/second; excess returns 429 with
+  `Retry-After: 1`.
+- Live desktop/390px: zero serious/critical axe issues, zero console/page
+  errors, no overflow, visible focus, keyboard route focus, reduced motion.
+- Privacy: landing/demo requests are same-origin only; demo storage and service
+  workers are empty.
+- Live headers/caching: CSP, HSTS, nosniff, strict referrer, immutable hashed
+  assets, ETag 304.
+- Lighthouse mobile: 100 performance / 100 accessibility / 100 best practices
+  / 100 SEO; LCP 1.1s, CLS 0.
+- Deployment identity: all 12 served build artifacts SHA-256 match.
 
-Every registered command in `.factory/claims.json` was run verbatim after
-`npm ci`; all seven passed. The repaired `fresh-last-pass` claim test passed
-individually and the complete `cargo test --test cli_claims` suite passed three
-consecutive times (6/6 each time), eliminating the prior timing-sensitive
-failure.
+## Required next steps
 
-```sh
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo package --allow-dirty
-npm run build
-```
+1. Reject non-loopback addresses or render truthful status-page copy from the
+   actual bind address; register and test the resulting claim.
+2. Increase the mobile header navigation gap from 4px to at least 8px.
+3. Rerun every command in `.factory/claims.json`, `npm test`, `npm run build`,
+   the non-loopback reproduction, and the live 390px spacing check.
 
-All passed. The package contains 24 files (145.1 KiB unpacked / 43.2 KiB
-compressed). A fresh consumer install from
-`target/package/worktree-verifier-0.1.0` succeeded; its installed binary
-printed version/help and `demo` created three Git worktrees with distinct
-commits, passed one declared check in each, and removed the temporary sample.
-
-Fresh production output is `dist/site/`: JS 7.67 KiB raw / 2.94 KiB gzip and
-CSS 6.57 KiB raw / 2.14 KiB gzip. The documentation site has no offline or
-update claim; its demo-storage claim verifies zero local/session storage,
-IndexedDB databases, or service workers.
-
-## Live and response-policy checks
-
-The live static site at
-`https://background-worktree-verifier.sociobot.in` was checked at desktop and
-390px. Live Playwright/axe scans of `/`, `/demo`, `/privacy`, `/terms`, and
-`/404.html` found zero serious/critical violations, no console/page errors, and
-no horizontal overflow. Keyboard reaches the skip link. Landing and demo made
-seven same-origin requests only; demo storage was empty and no service worker
-was registered.
-
-All served static artifacts hash-match the fresh `dist/site` build:
-`index.html`, `404.html`, hashed JS/CSS, `repair.css`, hero and social images,
-favicon, apple-touch icon, `robots.txt`, and `sitemap.xml`. `/`, `/demo`,
-`/privacy`, `/terms`, and documented static routes return 200; an unknown path
-returns HTTP 404. Responses include the self-only CSP with
-`frame-ancestors 'none'`, `Referrer-Policy: strict-origin-when-cross-origin`,
-`X-Content-Type-Options: nosniff`, HSTS, and immutable caching for hashed JS.
-
-## Commit, publish, and deployment
-
-`6528208` was pushed to `origin/main`.
-
-The work-order Static Web Apps command was attempted against the configured
-host:
-
-```sh
-swa deploy dist/site --app-name thankful-cliff-0703f2d10 --env production --no-use-keychain
-```
-
-It authenticated with the supplied Azure workload identity, then remained in
-the Azure project-settings request for more than three minutes without a
-success/failure response. The request was interrupted and its generated,
-ignored `.env` identity-metadata file was removed. No deployment credential is
-present in this repository. The production static artifact is already
-byte-identical to this repair's fresh build because the release-blocking fix is
-in the CLI source and regression suite, not the static site. The factory
-Static Web Apps deployment identity should be used to promote the pushed commit
-if a new platform deployment record is required.
-
-## Known gaps / next step
-
-There are no known product or test failures. The only operational gap is the
-unresponsive Static Web Apps control-plane deployment request described above;
-it did not return a deploy receipt in this worker. Re-run the exact `swa deploy`
-command with the factory deployment credential or through its static-deployment
-pipeline if a deployment receipt is needed.
+No product code was modified by this verification.
