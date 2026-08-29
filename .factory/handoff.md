@@ -124,6 +124,15 @@ the checked-in static work-order configuration. For the CLI, clone the
 repository and run `cargo install --path .`. See `README.md` and
 `.factory/demo.md` for normal and sample workflows.
 
+Repair commit `89202e6` was pushed to `origin/main`. DNS identifies the exact
+Static Web Apps host as `thankful-cliff-0703f2d10.7.azurestaticapps.net`; a
+`swa deploy dist/site --app-name thankful-cliff-0703f2d10 --env production
+--dry-run` reached that target but stopped because this worktree has no
+deployment token or factory deployment configuration. The public custom domain
+was still serving the prior `index-DgB2MAom.js` asset at the last check. No
+Azure infrastructure setting was changed. The pushed commit is therefore ready
+for the factory static-deployment pipeline to promote.
+
 ## Known behavior
 
 If a worktree changes continuously through all bounded retry attempts, the
