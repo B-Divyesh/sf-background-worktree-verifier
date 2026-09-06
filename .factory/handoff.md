@@ -1,18 +1,21 @@
-# Review 2 handoff — PASS
+# Review 3 handoff — PASS
 
-**Work order:** `background-worktree-verifier-review-2`
-**Reviewed candidate:** `90015cc044ac4a3378bcfb6daf0763cd3f39b210`
-**Live URL:** https://background-worktree-verifier.sociobot.in
+**Work order:** `background-worktree-verifier-review-3`
+**Implementation reviewed:** `d2866308ad06007f34c4bfda6c6da95839884b8d`
+**Documentation report commit before this handoff:** `aecf8b46bb48d627215052d1f9897e150a92b087`
+**Live URL:** <https://background-worktree-verifier.sociobot.in>
 
-An independent adversarial first-read review is recorded in
-`.factory/review-2.md`. No product code was modified and there are no findings
-or known gaps.
+No product code was modified. The independent seven-day review is recorded in
+`.factory/review-3.md` and passed with zero findings and zero untested claims.
+The live static output byte-matches a fresh build of the implementation
+candidate. Later commits before this report are documentation-only.
 
-Verification used fresh 390px and desktop browser contexts against the live
-site; it confirmed the first-screen message, one-click replayable demo,
-sticky/resettable demo warning, storage isolation, same-origin requests,
-routing, metadata, 404, focus behavior, link targets, accessibility, and the
-distinct visual system.
+Fresh phone and desktop contexts confirmed the job, audience, and primary
+action without scrolling; the one-click sample was populated, resettable, and
+persistently labelled; it stored no browser data and sent only same-origin
+requests. All public routes, titles, designed 404, links, keyboard focus,
+reduced motion, and axe serious/critical checks passed. The installed CLI was
+also exercised in a clean temporary Cargo root with `--help` and `demo`.
 
 From a new clone, run:
 
@@ -23,6 +26,6 @@ npm run build
 ```
 
 Then execute every `test` command listed in `.factory/claims.json`. All 14
-passed in this review. `cargo run -- demo` was also run from an empty temporary
-directory; it created and removed its own sample worktrees without touching the
-caller directory.
+passed in this review. `cargo install --path . --root <temporary-root>` and the
+installed `worktree-verifier demo` also passed without touching the caller
+directory.
